@@ -132,6 +132,19 @@ jobs:
           fi
         id: check-sarif
 
+      - name: Check cluster files cache exists
+        if: always()
+        run: |
+          CACHE_DIR="$HOME/.wiz/${{ matrix.deploy_env }}_clusterFilesCache"
+          if [ -f "$CACHE_DIR/clusterFiles.tar.gz" ]; then
+            echo "Cluster files cache exists: $CACHE_DIR"
+            echo "cluster_files_cache_exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "Cluster files cache not found: $CACHE_DIR"
+            echo "cluster_files_cache_exists=false" >> $GITHUB_OUTPUT
+          fi
+        id: check-cluster-files-cache
+
       - name: Upload SARIF file
         if: always() && steps.check-sarif.outputs.sarif_exists == 'true'
         uses: github/codeql-action/upload-sarif@v3
