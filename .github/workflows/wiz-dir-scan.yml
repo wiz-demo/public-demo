@@ -26,7 +26,7 @@ permissions:
   actions: read
 
 jobs:
-  Wiz-Multi-Tenant-Scan:
+  WizCLI-Dir-Scan:
     runs-on: ubuntu-latest
     env:
       WIZCLI_URL: https://downloads.wiz.io/experimental/v1/wizcli/latest/wizcli-linux-amd64
@@ -132,7 +132,6 @@ jobs:
             ${{ runner.os }}-wiz-config-${{ matrix.deploy_env }}-${{ matrix.tenant }}-
             ${{ runner.os }}-wiz-config-${{ matrix.deploy_env }}-
             ${{ runner.os }}-wiz-config-
-
 
       - name: Upload SARIF file
         uses: github/codeql-action/upload-sarif@v3
