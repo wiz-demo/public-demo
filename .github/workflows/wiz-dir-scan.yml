@@ -91,8 +91,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.wiz/${{ matrix.deploy_env }}_clusterFilesCache
-          key: ${{ runner.os }}-wiz-config-latest
+          key: ${{ runner.os }}-wiz-config-${{ matrix.deploy_env }}-${{ github.sha }}
           restore-keys: |
+            ${{ runner.os }}-wiz-config-${{ matrix.deploy_env }}-
             ${{ runner.os }}-wiz-config-
 
       - name: Run Wiz Security Scan
@@ -125,35 +126,11 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.wiz/${{ matrix.deploy_env }}_clusterFilesCache
-          key: ${{ runner.os }}-wiz-config-${{ steps.get-cluster-sha256.outputs.sha256 }}
+          key: ${{ runner.os }}-wiz-config-${{ matrix.deploy_env }}-${{ github.sha }}
           restore-keys: |
+            ${{ runner.os }}-wiz-config-${{ matrix.deploy_env }}-
             ${{ runner.os }}-wiz-config-
 
-      - name: Check SARIF file exists
-        if: always()
-        run: |
-          SARIF_FILE="${{ matrix.tenant }}-${{ github.run_id }}.json"
-          if [ -f "$SARIF_FILE" ]; then
-            echo "SARIF file exists: $SARIF_FILE"
-            echo "sarif_exists=true" >> $GITHUB_OUTPUT
-          else
-            echo "SARIF file not found: $SARIF_FILE"
-            echo "sarif_exists=false" >> $GITHUB_OUTPUT
-          fi
-        id: check-sarif
-
-      - name: Check cluster files cache exists
-        if: always()
-        run: |
-          CACHE_DIR="$HOME/.wiz/${{ matrix.deploy_env }}_clusterFilesCache"
-          if [ -f "$CACHE_DIR/clusterFiles.tar.gz" ]; then
-            echo "Cluster files cache exists: $CACHE_DIR"
-            echo "cluster_files_cache_exists=true" >> $GITHUB_OUTPUT
-          else
-            echo "Cluster files cache not found: $CACHE_DIR"
-            echo "cluster_files_cache_exists=false" >> $GITHUB_OUTPUT
-          fi
-        id: check-cluster-files-cache
 
       - name: Upload SARIF file
         if: always() && steps.check-sarif.outputs.sarif_exists == 'true'
