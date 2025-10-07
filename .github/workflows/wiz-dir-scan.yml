@@ -55,13 +55,13 @@ jobs:
         env:
           WIZ_CLIENT_ID: op://wiz-demo/${{ matrix.op_item }}/username
           WIZ_CLIENT_SECRET: op://wiz-demo/${{ matrix.op_item }}/password
-          WIZCLI_URL: op://wiz-demo/scenarios_gar-registry-${{ matrix.deploy_env }}/wizcliUrl
+          WIZCLI_URL: https://downloads.wiz.io/experimental/v1/wizcli/latest/wizcli-linux-amd64
 
       - name: Cache Wiz CLI Binary
         uses: actions/cache@v4
         with:
           path: ~/.wiz/wizcli
-          key: ${{ runner.os }}-wizcli-${{ github.event.inputs.wizcli_version || '1.10.0' }}
+          key: ${{ runner.os }}-wizcli-latest
           restore-keys: |
             ${{ runner.os }}-wizcli-
 
@@ -72,9 +72,11 @@ jobs:
             mkdir -p ~/.wiz
             curl -o ~/.wiz/wizcli ${{ env.WIZCLI_URL }} && chmod +x ~/.wiz/wizcli
             WIZCLI_MD5=$(md5sum ~/.wiz/wizcli | cut -d' ' -f1)
-            echo "WizCLI MD5: $WIZCLI_MD5"
+            echo "WIZCLI_MD5=$WIZCLI_MD5" >> $GITHUB_ENV
           else
             echo "Using cached Wiz CLI"
+            WIZCLI_MD5=$(md5sum ~/.wiz/wizcli | cut -d' ' -f1)
+            echo "WIZCLI_MD5=$WIZCLI_MD5" >> $GITHUB_ENV
           fi
           echo "WIZCLI_PATH=~/.wiz/wizcli" >> $GITHUB_ENV
 
