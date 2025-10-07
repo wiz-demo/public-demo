@@ -1,7 +1,16 @@
-name: Wiz CLI Directory Scan
+name: Wiz CLI Multi-Tenant Directory Scan
 
 on:
   workflow_dispatch:
+    inputs:
+      wizcli_version:
+        description: 'Version of Wiz CLI to use for scanning'
+        required: true
+        default: '1.10.0'
+      tenants:
+        description: 'Comma-separated list of tenants to scan (e.g., staging,demo,production)'
+        required: false
+        default: 'staging,demo'
   push:
     branches:
       - main
@@ -16,34 +25,92 @@ permissions:
   security-events: write
 
 jobs:
-  Wiz-Directory-Scan:
+  Wiz-Multi-Tenant-Scan:
     runs-on: ubuntu-latest
-    env:
-      WIZ_CLIENT_ID: ${{ secrets.WIZ_CLIENT_ID }}
-      WIZ_CLIENT_SECRET: ${{ secrets.WIZ_CLIENT_SECRET }}
+    strategy:
+      fail-fast: false
+      matrix:
+        tenant: ${{ fromJSON(format('["{0}"]', join('","', split(github.event.inputs.tenants || 'staging,demo', ',')))) }}
+        include:
+          - tenant: staging
+            deploy_env: demo
+            op_item: tenant_adv-stg-wizcli-sa
+          - tenant: demo
+            deploy_env: demo
+            op_item: tenant_adv-prod-wizcli-sa
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11
 
-      - name: Set Wiz Environment Variables
+      - name: Configure 1Password Service Account
+        uses: 1password/load-secrets-action/configure@581a835fb51b8e7ec56b71cf2ffddd7e68bb25e0
+        with:
+          service-account-token: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
+
+      - name: Load Environment Secrets
+        uses: 1password/load-secrets-action@581a835fb51b8e7ec56b71cf2ffddd7e68bb25e0
+        with:
+          export-env: true
+        env:
+          WIZ_CLIENT_ID: op://wiz-demo/${{ matrix.op_item }}/username
+          WIZ_CLIENT_SECRET: op://wiz-demo/${{ matrix.op_item }}/password
+          WIZCLI_URL: op://wiz-demo/scenarios_gar-registry-${{ matrix.deploy_env }}/wizcliUrl
+
+      - name: Cache Wiz CLI Binary
+        uses: actions/cache@v4
+        with:
+          path: ~/.wiz/wizcli
+          key: ${{ runner.os }}-wizcli-${{ github.event.inputs.wizcli_version || '1.10.0' }}
+          restore-keys: |
+            ${{ runner.os }}-wizcli-
+
+      - name: Install Wiz CLI
         run: |
-          if [[ ! -z "${{ vars.WIZ_ENV }}" && "${{ vars.WIZ_ENV }}" != "app" ]]; then echo "WIZ_ENV=${{ vars.WIZ_ENV }}" >> $GITHUB_ENV; fi
+          if [ ! -f ~/.wiz/wizcli ]; then
+            echo "Downloading Wiz CLI..."
+            mkdir -p ~/.wiz
+            curl -o ~/.wiz/wizcli ${{ env.WIZCLI_URL }} && chmod +x ~/.wiz/wizcli
+            WIZCLI_MD5=$(md5sum ~/.wiz/wizcli | cut -d' ' -f1)
+            echo "WizCLI MD5: $WIZCLI_MD5"
+          else
+            echo "Using cached Wiz CLI"
+          fi
+          echo "WIZCLI_PATH=~/.wiz/wizcli" >> $GITHUB_ENV
 
-      - name: Download Wiz CLI
-        run: curl -o wizcli https://wizcli.app.wiz.io/latest/wizcli && chmod +x wizcli
+      - name: Cache Wiz configuration and rules
+        uses: actions/cache@v4
+        with:
+          path: ~/.wiz/${{ matrix.deploy_env }}_clusterFiles
+          key: ${{ runner.os }}-wiz-config-${{ hashFiles('**/wizcli-dynamic-comparison.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-wiz-config-
 
-      - name: Authenticate to Wiz
-        run: ./wizcli auth
-
-      - name: Run Wiz CLI Directory Scan
-        run: |-
-          ./wizcli dir scan --path "." \
-          --tag github_action_run_id=${{ github.run_id }} -o wiz-output.json,sarif,true \
-          --sbom-format spdx-json --sbom-output-file sbom.json
+      - name: Run Wiz Security Scan
+        run: |
+          sudo -E ${{ env.WIZCLI_PATH }} scan dir --path "." \
+          --name "${{ github.repository }}-${{ matrix.tenant }}-${{ github.run_id }}" \
+          --tag github_action_run_id=${{ github.run_id }} \
+          --tag tenant=${{ matrix.tenant }} \
+          --tag deploy_env=${{ matrix.deploy_env }} \
+          --sarif-output-file "${{ github.repository }}-${{ matrix.tenant }}-${{ github.run_id }}.json" \
+          --sbom-format spdx-json \
+          --sbom-output-file "${{ github.repository }}-${{ matrix.tenant }}-${{ github.run_id }}-sbom.json"
+        env:
+          WIZ_ENV: ${{ matrix.deploy_env }}
+        continue-on-error: true
 
       - name: Upload SARIF file
         uses: github/codeql-action/upload-sarif@v3
         with:
-          sarif_file: wiz-output.json
-          category: wiz-dir
+          sarif_file: "${{ github.repository }}-${{ matrix.tenant }}-${{ github.run_id }}.json"
+          category: wiz-${{ matrix.tenant }}
+        continue-on-error: true
+
+      - name: Upload SBOM file
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-${{ matrix.tenant }}-${{ github.run_id }}
+          path: "${{ github.repository }}-${{ matrix.tenant }}-${{ github.run_id }}-sbom.json"
+          retention-days: 30
+        continue-on-error: true
