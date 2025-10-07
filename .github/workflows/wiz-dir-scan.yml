@@ -27,10 +27,12 @@ permissions:
 jobs:
   Wiz-Multi-Tenant-Scan:
     runs-on: ubuntu-latest
+    env:
+      WIZCLI_URL: https://downloads.wiz.io/experimental/v1/wizcli/latest/wizcli-linux-amd64
     strategy:
       fail-fast: false
       matrix:
-        tenant: ${{ fromJSON(format('["{0}"]', join('","', fromJSON(format('["{0}"]', github.event.inputs.tenants || 'staging,demo'))))) }}
+        tenant: [staging, demo]
         include:
           - tenant: staging
             deploy_env: demo
@@ -55,7 +57,6 @@ jobs:
         env:
           WIZ_CLIENT_ID: op://wiz-demo/${{ matrix.op_item }}/username
           WIZ_CLIENT_SECRET: op://wiz-demo/${{ matrix.op_item }}/password
-          WIZCLI_URL: https://downloads.wiz.io/experimental/v1/wizcli/latest/wizcli-linux-amd64
 
       - name: Cache Wiz CLI Binary
         uses: actions/cache@v4
