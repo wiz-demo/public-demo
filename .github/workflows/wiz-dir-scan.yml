@@ -104,7 +104,7 @@ jobs:
       - name: Cache Wiz configuration and rules
         uses: actions/cache@v4
         with:
-          path: ~/.wiz/${{ matrix.deploy_env }}_clusterFiles
+          path: ~/.wiz/${{ matrix.deploy_env }}_clusterFiles/clusterFiles.tar.gz
           key: ${{ runner.os }}-wiz-config-${{ steps.get-cluster-sha256.outputs.sha256 }}
           restore-keys: |
             ${{ runner.os }}-wiz-config-
