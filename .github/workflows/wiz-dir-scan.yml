@@ -91,8 +91,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.wiz/${{ matrix.deploy_env }}_clusterFilesCache
-          key: ${{ runner.os }}-wiz-config-${{ matrix.deploy_env }}-${{ github.sha }}
+          key: ${{ runner.os }}-wiz-config-${{ matrix.deploy_env }}-${{ matrix.tenant }}-${{ github.sha }}
           restore-keys: |
+            ${{ runner.os }}-wiz-config-${{ matrix.deploy_env }}-${{ matrix.tenant }}-
             ${{ runner.os }}-wiz-config-${{ matrix.deploy_env }}-
             ${{ runner.os }}-wiz-config-
 
@@ -126,14 +127,14 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.wiz/${{ matrix.deploy_env }}_clusterFilesCache
-          key: ${{ runner.os }}-wiz-config-${{ matrix.deploy_env }}-${{ github.sha }}
+          key: ${{ runner.os }}-wiz-config-${{ matrix.deploy_env }}-${{ matrix.tenant }}-${{ github.sha }}
           restore-keys: |
+            ${{ runner.os }}-wiz-config-${{ matrix.deploy_env }}-${{ matrix.tenant }}-
             ${{ runner.os }}-wiz-config-${{ matrix.deploy_env }}-
             ${{ runner.os }}-wiz-config-
 
 
       - name: Upload SARIF file
-        if: always() && steps.check-sarif.outputs.sarif_exists == 'true'
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: "${{ matrix.tenant }}-${{ github.run_id }}.json"
