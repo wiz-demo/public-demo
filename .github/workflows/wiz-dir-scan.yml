@@ -23,6 +23,7 @@ on:
 permissions:
   contents: read
   security-events: write
+  actions: read
 
 jobs:
   Wiz-Multi-Tenant-Scan:
@@ -58,11 +59,19 @@ jobs:
           WIZ_CLIENT_ID: op://wiz-demo/${{ matrix.op_item }}/username
           WIZ_CLIENT_SECRET: op://wiz-demo/${{ matrix.op_item }}/password
 
+      - name: Get Wiz CLI SHA256
+        id: get-sha256
+        run: |
+          echo "Fetching Wiz CLI SHA256..."
+          WIZCLI_SHA256=$(curl -s https://downloads.wiz.io/experimental/v1/wizcli/latest/wizcli-linux-amd64-sha256)
+          echo "Wiz CLI SHA256: $WIZCLI_SHA256"
+          echo "sha256=$WIZCLI_SHA256" >> $GITHUB_OUTPUT
+
       - name: Cache Wiz CLI Binary
         uses: actions/cache@v4
         with:
           path: ~/.wiz/wizcli
-          key: ${{ runner.os }}-wizcli-latest
+          key: ${{ runner.os }}-wizcli-${{ steps.get-sha256.outputs.sha256 }}
           restore-keys: |
             ${{ runner.os }}-wizcli-
 
@@ -72,20 +81,31 @@ jobs:
             echo "Downloading Wiz CLI..."
             mkdir -p ~/.wiz
             curl -o ~/.wiz/wizcli ${{ env.WIZCLI_URL }} && chmod +x ~/.wiz/wizcli
-            WIZCLI_MD5=$(md5sum ~/.wiz/wizcli | cut -d' ' -f1)
-            echo "WIZCLI_MD5=$WIZCLI_MD5" >> $GITHUB_ENV
+            echo "Downloaded Wiz CLI with SHA256: ${{ steps.get-sha256.outputs.sha256 }}"
           else
-            echo "Using cached Wiz CLI"
-            WIZCLI_MD5=$(md5sum ~/.wiz/wizcli | cut -d' ' -f1)
-            echo "WIZCLI_MD5=$WIZCLI_MD5" >> $GITHUB_ENV
+            echo "Using cached Wiz CLI with SHA256: ${{ steps.get-sha256.outputs.sha256 }}"
           fi
           echo "WIZCLI_PATH=~/.wiz/wizcli" >> $GITHUB_ENV
+
+      - name: Get Cluster Files Cache SHA256
+        id: get-cluster-sha256
+        run: |
+          echo "Checking for existing cluster files cache..."
+          CACHE_DIR="$HOME/.wiz/${{ matrix.deploy_env }}_clusterFilesCache"
+          if [ -f "$CACHE_DIR/clusterFiles.tar.gz" ]; then
+            CLUSTER_SHA256=$(sha256sum "$CACHE_DIR/clusterFiles.tar.gz" | cut -d' ' -f1)
+            echo "Existing cluster files SHA256: $CLUSTER_SHA256"
+            echo "sha256=$CLUSTER_SHA256" >> $GITHUB_OUTPUT
+          else
+            echo "No existing cluster files cache found"
+            echo "sha256=no-cache" >> $GITHUB_OUTPUT
+          fi
 
       - name: Cache Wiz configuration and rules
         uses: actions/cache@v4
         with:
           path: ~/.wiz/${{ matrix.deploy_env }}_clusterFiles
-          key: ${{ runner.os }}-wiz-config-${{ hashFiles('**/wizcli-dynamic-comparison.yaml') }}
+          key: ${{ runner.os }}-wiz-config-${{ steps.get-cluster-sha256.outputs.sha256 }}
           restore-keys: |
             ${{ runner.os }}-wiz-config-
 
@@ -99,7 +119,21 @@ jobs:
           WIZ_ENV: ${{ matrix.deploy_env }}
         continue-on-error: true
 
+      - name: Check SARIF file exists
+        if: always()
+        run: |
+          SARIF_FILE="${{ matrix.tenant }}-${{ github.run_id }}.json"
+          if [ -f "$SARIF_FILE" ]; then
+            echo "SARIF file exists: $SARIF_FILE"
+            echo "sarif_exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "SARIF file not found: $SARIF_FILE"
+            echo "sarif_exists=false" >> $GITHUB_OUTPUT
+          fi
+        id: check-sarif
+
       - name: Upload SARIF file
+        if: always() && steps.check-sarif.outputs.sarif_exists == 'true'
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: "${{ matrix.tenant }}-${{ github.run_id }}.json"
