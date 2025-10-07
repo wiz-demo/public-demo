@@ -30,7 +30,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        tenant: ${{ fromJSON(format('["{0}"]', join('","', split(github.event.inputs.tenants || 'staging,demo', ',')))) }}
+        tenant: ${{ fromJSON(format('["{0}"]', join('","', fromJSON(format('["{0}"]', github.event.inputs.tenants || 'staging,demo'))))) }}
         include:
           - tenant: staging
             deploy_env: demo
