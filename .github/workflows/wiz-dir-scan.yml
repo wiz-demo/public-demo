@@ -87,25 +87,11 @@ jobs:
           fi
           echo "WIZCLI_PATH=~/.wiz/wizcli" >> $GITHUB_ENV
 
-      - name: Get Cluster Files Cache SHA256
-        id: get-cluster-sha256
-        run: |
-          echo "Checking for existing cluster files cache..."
-          CACHE_DIR="$HOME/.wiz/${{ matrix.deploy_env }}_clusterFilesCache"
-          if [ -f "$CACHE_DIR/clusterFiles.tar.gz" ]; then
-            CLUSTER_SHA256=$(sha256sum "$CACHE_DIR/clusterFiles.tar.gz" | cut -d' ' -f1)
-            echo "Existing cluster files SHA256: $CLUSTER_SHA256"
-            echo "sha256=$CLUSTER_SHA256" >> $GITHUB_OUTPUT
-          else
-            echo "No existing cluster files cache found"
-            echo "sha256=no-cache" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Cache Wiz configuration and rules
+      - name: Restore Wiz configuration and rules cache
         uses: actions/cache@v4
         with:
-          path: ~/.wiz/${{ matrix.deploy_env }}_clusterFiles/clusterFiles.tar.gz
-          key: ${{ runner.os }}-wiz-config-${{ steps.get-cluster-sha256.outputs.sha256 }}
+          path: ~/.wiz/${{ matrix.deploy_env }}_clusterFilesCache
+          key: ${{ runner.os }}-wiz-config-latest
           restore-keys: |
             ${{ runner.os }}-wiz-config-
 
@@ -118,6 +104,30 @@ jobs:
         env:
           WIZ_ENV: ${{ matrix.deploy_env }}
         continue-on-error: true
+
+      - name: Get Cluster Files Cache SHA256
+        if: always()
+        id: get-cluster-sha256
+        run: |
+          echo "Checking for cluster files cache after scan..."
+          CACHE_DIR="$HOME/.wiz/${{ matrix.deploy_env }}_clusterFilesCache"
+          if [ -f "$CACHE_DIR/clusterFiles.tar.gz" ]; then
+            CLUSTER_SHA256=$(sha256sum "$CACHE_DIR/clusterFiles.tar.gz" | cut -d' ' -f1)
+            echo "Cluster files SHA256: $CLUSTER_SHA256"
+            echo "sha256=$CLUSTER_SHA256" >> $GITHUB_OUTPUT
+          else
+            echo "No cluster files cache found after scan"
+            echo "sha256=no-cache" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Cache Wiz configuration and rules
+        if: always() && steps.get-cluster-sha256.outputs.sha256 != 'no-cache'
+        uses: actions/cache@v4
+        with:
+          path: ~/.wiz/${{ matrix.deploy_env }}_clusterFilesCache
+          key: ${{ runner.os }}-wiz-config-${{ steps.get-cluster-sha256.outputs.sha256 }}
+          restore-keys: |
+            ${{ runner.os }}-wiz-config-
 
       - name: Check SARIF file exists
         if: always()
