@@ -91,7 +91,7 @@ jobs:
 
       - name: Run Wiz Security Scan
         run: |
-          sudo -E ${{ env.WIZCLI_PATH }} scan dir --path "." \
+          sudo -E ${{ env.WIZCLI_PATH }} scan dir "." \
           --name "${{ github.repository }}-${{ matrix.tenant }}-${{ github.run_id }}" \
           --tag github_action_run_id=${{ github.run_id }} \
           --tag tenant=${{ matrix.tenant }} \
