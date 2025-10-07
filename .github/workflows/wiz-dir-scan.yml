@@ -92,12 +92,8 @@ jobs:
       - name: Run Wiz Security Scan
         run: |
           sudo -E ${{ env.WIZCLI_PATH }} scan dir "." \
-          --name "${{ github.repository }}-${{ matrix.tenant }}-${{ github.run_id }}" \
-          --tag github_action_run_id=${{ github.run_id }} \
-          --tag tenant=${{ matrix.tenant }} \
-          --tag deploy_env=${{ matrix.deploy_env }} \
-          --sarif-output-file "${{ github.repository }}-${{ matrix.tenant }}-${{ github.run_id }}.json" \
-          --sbom-format spdx-json \
+          --name "${{ github.repository }}-${{ matrix.tenant }}-${{ github.run_id }}" --tag github_action_run_id=${{ github.run_id }} \
+          --tag tenant=${{ matrix.tenant }} --tag deploy_env=${{ matrix.deploy_env }} --sarif-output-file "${{ github.repository }}-${{ matrix.tenant }}-${{ github.run_id }}.json" --sbom-format spdx-json \
           --sbom-output-file "${{ github.repository }}-${{ matrix.tenant }}-${{ github.run_id }}-sbom.json"
         env:
           WIZ_ENV: ${{ matrix.deploy_env }}
