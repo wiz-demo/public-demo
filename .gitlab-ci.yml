@@ -49,7 +49,7 @@ build-scan-push-tag:
     #    - sast-demo/**/*
   before_script:
     - apk update && apk add curl
-    - curl --silent -o wizcli https://wizcli.app.wiz.io/latest/wizcli-linux-amd64 && chmod +x wizcli
+    - curl --silent -o wizcli https://downloads.wiz.io/v1/wizcli/latest/wizcli-linux-amd64 && chmod +x wizcli
     - ./wizcli auth
   script:
     - docker build $DOCKERFILE_PATH --tag $IMAGE_REGISTRY/$IMAGE_NAME:$IMAGE_TAG
