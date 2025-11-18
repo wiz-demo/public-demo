@@ -37,10 +37,10 @@ jobs:
         include:
           - tenant: staging
             deploy_env: demo
-            op_item: tenant_adv-stg-wizcli-sa
+            op_item: tenant_stgadvanced-wizcli-sa
           - tenant: demo
             deploy_env: demo
-            op_item: tenant_adv-prod-wizcli-sa
+            op_item: tenant_advanced-wizcli-sa
 
     steps:
       - name: Checkout
