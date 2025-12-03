@@ -8,9 +8,9 @@ ENV LANG=C.UTF-8
 
 WORKDIR /app
 
-COPY requirements.txt ./
+COPY src/requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY app.py ./
+COPY src/app.py ./
 
 ENTRYPOINT [ "python", "-u", "/app/app.py" ]

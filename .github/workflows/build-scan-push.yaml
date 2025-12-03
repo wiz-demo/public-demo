@@ -1,0 +1,265 @@
+name: Build/Scan/Push Containers
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment (overrides branch-based logic)'
+        required: false
+        type: choice
+        options:
+        - advanced
+        - stgadvanced
+      versions:
+        description: 'WizCLI version to use for scanning'
+        required: true
+        default: '1.15.0'
+  push:
+    branches:
+      - main
+      - staging
+      - develop
+    paths:
+      - sast-demo/src/**
+      - sast-demo/dockerfiles/**
+      - .github/workflows/build-scan-push.yml
+
+permissions:
+  id-token: write
+  contents: read
+  actions: read
+  security-events: write
+
+env:
+  DEPLOY_ENV: ${{
+    github.event_name == 'workflow_dispatch' && github.event.inputs.environment ||
+    (github.ref == 'refs/heads/main' && 'advanced') ||
+    (github.ref == 'refs/heads/develop' && 'stgadvanced') ||
+    (github.ref == 'refs/heads/staging' && 'stgadvanced') ||
+    'test' }}
+  WIZ_ENV: "demo"
+  IMAGE_NAME: "${{ github.event.repository.name }}"
+
+jobs:
+  build-and-scan:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        dockerfile: [python]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11
+
+      - name: Configure 1Password Service Account
+        uses: 1password/load-secrets-action/configure@581a835fb51b8e7ec56b71cf2ffddd7e68bb25e0
+        with:
+          service-account-token: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
+
+      - name: Load Environment Secrets
+        uses: 1password/load-secrets-action@581a835fb51b8e7ec56b71cf2ffddd7e68bb25e0
+        with:
+          export-env: true
+        env:
+          IMAGE_REGISTRY: op://wiz-demo/gar_${{ env.DEPLOY_ENV }}-registry/registryUrl
+          REGISTRY_REGION: op://wiz-demo/gar_${{ env.DEPLOY_ENV }}-registry/registryRegion
+          WIF_PROVIDER: op://wiz-demo/gar_${{ env.DEPLOY_ENV }}-registry/workloadIdentityProvider
+          WIF_SERVICE_ACCOUNT: op://wiz-demo/gar_${{ env.DEPLOY_ENV }}-registry/pusherServiceAccount
+          WIZ_CLIENT_ID: op://wiz-demo/tenant_${{ env.DEPLOY_ENV}}-wizcli-sa/username
+          WIZ_CLIENT_SECRET: op://wiz-demo/tenant_${{ env.DEPLOY_ENV }}-wizcli-sa/password
+          WIZCLI_URL: op://wiz-demo/tenant_${{ env.DEPLOY_ENV }}-wizcli-sa//wizcliUrl
+          WIZ_OS_REGISTRY: op://wiz-demo/tenant_csatest-wizos-registry-credentials/registryUrl           # Has to stay here until we get registry credentials in demo tenants
+          WIZ_OS_USER: op://wiz-demo/tenant_csatest-wizos-registry-credentials/username                  # Has to stay here until we get registry credentials in demo tenants
+          WIZ_OS_PASSWORD: op://wiz-demo/tenant_csatest-wizos-registry-credentials/credential
+          WIZ_OS_CLIENT_ID: op://wiz-demo/tenant_${{ env.DEPLOY_ENV }}-wizos-apk-credentials/username
+          WIZ_OS_CLIENT_SECRET: op://wiz-demo/tenant_${{ env.DEPLOY_ENV }}-wizos-apk-credentials/credential
+          # WIZ_OS_CLIENT_ID: op://wiz-demo/tenant_adv-${{ env.DEPLOY_ENV == 'staging' && 'stg-' || '' }}-wizos-apk-credentials/username
+          # WIZ_OS_CLIENT_SECRET: op://wiz-demo/tenant_adv-${{ env.DEPLOY_ENV == 'staging' && 'stg-' || '' }}-wizos-apk-credentials/credential
+
+      - name: Get Wiz CLI SHA256
+        id: get-sha256
+        run: |
+          echo "Fetching Wiz CLI SHA256..."
+          WIZCLI_SHA256=$(curl -s ${{ env.WIZCLI_URL }}-sha256)
+          echo "Wiz CLI SHA256: $WIZCLI_SHA256"
+          echo "sha256=$WIZCLI_SHA256" >> $GITHUB_OUTPUT
+
+      - name: Cache Wiz CLI Binary
+        uses: actions/cache@v4
+        with:
+          path: ~/.wiz/wizcli
+          key: ${{ runner.os }}-wizcli-${{ steps.get-sha256.outputs.sha256 }}
+          restore-keys: |
+            ${{ runner.os }}-wizcli-
+
+      - name: Restore Wiz configuration and rules cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.wiz/${{ (env.WIZ_ENV == '' || env.WIZ_ENV == 'app') && 'clusterFilesCache' || format('{0}_clusterFilesCache', env.WIZ_ENV) }}
+          key: ${{ runner.os }}-wiz-config-${{ env.WIZ_ENV || 'default' }}-${{ env.DEPLOY_ENV }}
+          restore-keys: |
+            ${{ runner.os }}-wiz-config-${{ env.WIZ_ENV || 'default' }}-${{ env.DEPLOY_ENV }}
+            ${{ runner.os }}-wiz-config-${{ env.WIZ_ENV || 'default' }}-
+            ${{ runner.os }}-wiz-config-
+
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f95db51fddba0c2d1ec667646a06c2ce06100226
+
+      - name: Collect Docker Metadata
+        id: meta
+        uses: docker/metadata-action@c1e51972afc2121e065aed6d45c65596fe445f3f
+        with:
+          images: ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAME }}-${{ matrix.dockerfile }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=${{ env.DEPLOY_ENV }}-${{ matrix.dockerfile }}-{{sha}}
+
+      - name: Authenticate to Google Cloud
+        id: auth
+        uses: google-github-actions/auth@ba79af03959ebeac9769e648f473a284504d9193
+        with:
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.WIF_SERVICE_ACCOUNT }}
+
+      - name: Login to Container Registry
+        run: gcloud auth configure-docker ${{ env.REGISTRY_REGION }}-docker.pkg.dev
+
+      - name: Login to Wiz OS Container Registry
+        if: matrix.dockerfile == 'wizos'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.WIZ_OS_REGISTRY }}
+          username: ${{ env.WIZ_OS_USER }}
+          password: ${{ env.WIZ_OS_PASSWORD }}
+        continue-on-error: true
+
+      - name: Build Docker Image (Local Only)
+        id: build-image
+        uses: docker/build-push-action@v5
+        with:
+          cache-from: |
+            type=gha,scope=${{ env.IMAGE_NAME }}-${{ matrix.dockerfile }}-${{ env.DEPLOY_ENV }}
+            type=gha,scope=${{ env.IMAGE_NAME }}-${{ matrix.dockerfile }}
+          cache-to: type=gha,mode=max,scope=${{ env.IMAGE_NAME }}-${{ matrix.dockerfile }}-${{ env.DEPLOY_ENV }}
+          context: ./
+          file: ./dockerfiles/${{ matrix.dockerfile }}/Dockerfile
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: |
+            ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAME }}-${{ matrix.dockerfile }}:${{ vars.IMAGE_TAG }}
+            ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAME }}-${{ matrix.dockerfile }}:${{ env.DEPLOY_ENV }}-${{ github.sha }}
+          labels: ${{ steps.meta.outputs.labels }}
+          secrets: |
+            ${{ matrix.dockerfile == 'wizos' && 'id=WIZOS_CLIENT_ID,env=WIZ_OS_CLIENT_ID' || '' }}
+            ${{ matrix.dockerfile == 'wizos' && 'id=WIZOS_CLIENT_SECRET,env=WIZ_OS_CLIENT_SECRET' || '' }}
+        continue-on-error: ${{ env.DEPLOY_ENV == 'develop' }}
+
+      - name: Install Wiz CLI
+        if: success() || (failure() && env.DEPLOY_ENV == 'develop')
+        run: |
+          if [ ! -f ~/.wiz/wizcli ]; then
+            echo "Downloading Wiz CLI..."
+            mkdir -p ~/.wiz
+            curl -o ~/.wiz/wizcli ${{ env.WIZCLI_URL }} && chmod +x ~/.wiz/wizcli
+            echo "Downloaded Wiz CLI with SHA256: ${{ steps.get-sha256.outputs.sha256 }}"
+          else
+            echo "Using cached Wiz CLI with SHA256: ${{ steps.get-sha256.outputs.sha256 }}"
+          fi
+          echo "WIZCLI_PATH=$HOME/.wiz/wizcli" >> $GITHUB_ENV
+
+      - name: Run Wiz Security Scan
+        if: success() || (failure() && env.DEPLOY_ENV == 'develop')
+        run: |
+          sudo -E ${{ env.WIZCLI_PATH }} scan container-image "${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAME }}-${{ matrix.dockerfile }}:${{ vars.IMAGE_TAG }}" \
+            --dockerfile "./dockerfiles/${{ matrix.dockerfile }}/Dockerfile" \
+            --tag github_action_run_id=${{ github.run_id }} \
+            --tag dockerfile=${{ matrix.dockerfile }} \
+            --tag environment=${{ env.DEPLOY_ENV }} \
+            --sarif-output-file "${{ env.IMAGE_NAME }}-${{ matrix.dockerfile }}-${{ github.run_id }}-sarif.json" \
+            --sbom-format spdx-json \
+            --sbom-output-file "${{ env.IMAGE_NAME }}-${{ matrix.dockerfile }}-${{ github.run_id }}-sbom.json"
+        continue-on-error: ${{ env.DEPLOY_ENV == 'develop' }}
+
+      - name: Push Docker Image (After Scan Pass)
+        if: success() || (failure() && env.DEPLOY_ENV == 'develop')
+        run: |
+          echo "Pushing pre-built image to registry..."
+          docker push "${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAME }}-${{ matrix.dockerfile }}:${{ vars.IMAGE_TAG }}"
+          docker push "${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAME }}-${{ matrix.dockerfile }}:${{ env.DEPLOY_ENV }}-${{ github.sha }}"
+        continue-on-error: ${{ env.DEPLOY_ENV == 'develop' }}
+
+      - name: Tag Image in Wiz (After Push)
+        if: success() || (failure() && env.DEPLOY_ENV == 'develop')
+        run: |
+          echo "Tagging image in Wiz with digest..."
+          sudo -E ${{ env.WIZCLI_PATH }} tag "${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAME }}-${{ matrix.dockerfile }}:${{ vars.IMAGE_TAG }}" --digest "${{ steps.build-image.outputs.digest }}"
+        continue-on-error: ${{ env.DEPLOY_ENV == 'develop' }}
+
+      - name: Get Cluster Files Cache SHA256
+        if: always()
+        id: get-cluster-sha256
+        run: |
+          echo "Checking for cluster files cache after scan..."
+          # Determine cache path based on WIZ_ENV
+          if [ -z "${{ env.WIZ_ENV }}" ] || [ "${{ env.WIZ_ENV }}" = "app" ]; then
+            CACHE_DIR="$HOME/.wiz/clusterFilesCache"
+          else
+            CACHE_DIR="$HOME/.wiz/${{ env.WIZ_ENV }}_clusterFilesCache"
+          fi
+          echo "Expected cache directory: $CACHE_DIR"
+
+          if [ -d "$CACHE_DIR" ] && [ -f "$CACHE_DIR/clusterFiles.tar.gz" ]; then
+            CLUSTER_SHA256=$(sha256sum "$CACHE_DIR/clusterFiles.tar.gz" | cut -d' ' -f1)
+            echo "Cluster files SHA256: $CLUSTER_SHA256"
+            echo "sha256=$CLUSTER_SHA256" >> $GITHUB_OUTPUT
+            echo "cache_exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "No cluster files cache found after scan"
+            echo "sha256=no-cache" >> $GITHUB_OUTPUT
+            echo "cache_exists=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Cache Wiz configuration and rules
+        if: always() && steps.get-cluster-sha256.outputs.cache_exists == 'true'
+        uses: actions/cache@v4
+        with:
+          path: ~/.wiz/${{ (env.WIZ_ENV == '' || env.WIZ_ENV == 'app') && 'clusterFilesCache' || format('{0}_clusterFilesCache', env.WIZ_ENV) }}
+          key: ${{ runner.os }}-wiz-config-${{ env.WIZ_ENV || 'default' }}-${{ matrix.dockerfile }}-${{ env.DEPLOY_ENV }}
+          restore-keys: |
+            ${{ runner.os }}-wiz-config-${{ env.WIZ_ENV || 'default' }}-${{ matrix.dockerfile }}-${{ env.DEPLOY_ENV }}
+            ${{ runner.os }}-wiz-config-${{ env.WIZ_ENV || 'default' }}-
+            ${{ runner.os }}-wiz-config-
+
+      - name: Upload SARIF file
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: ${{ env.IMAGE_NAME }}-${{ matrix.dockerfile }}-${{ github.run_id }}-sarif.json
+          category: wiz-${{ matrix.dockerfile }}
+        continue-on-error: true
+
+      - name: Upload SBOM file
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 #v5.0.0
+        with:
+          name: sbom-${{ env.IMAGE_NAME }}-${{ matrix.dockerfile }}-${{ github.run_id }}
+          path: ${{ env.IMAGE_NAME }}-${{ matrix.dockerfile }}-${{ github.run_id }}-sbom.json
+          retention-days: 30
+        continue-on-error: true
+
+      - name: Handle Development Environment Issues
+        if: failure() && env.DEPLOY_ENV == 'develop'
+        run: |
+          echo "::error::Build failed for develop environment"
+          echo "::error::This may be due to ephemeral GAR registry issues. Please check:"
+          echo "::error::  1. Does the 'scenarios_gar-registry-develop' entry exist in 1Password?"
+          echo "::error::  2. Does the GAR registry referenced in 1Password still exist?"
+          echo "::error::  3. Are the credentials in 1Password still valid?"
+          echo "::error::"
+          echo "::error::If the develop GAR registry was deleted, you may need to:"
+          echo "::error::  - Create a new develop GAR registry"
+          echo "::error::  - Update the 'scenarios_gar-registry-develop' entry in 1Password with new registry details"
+          echo "::error::  - Or remove the 1Password entry if develop environment is no longer needed"
