@@ -38,7 +38,7 @@ env:
     (github.ref == 'refs/heads/staging' && 'stgadvanced') ||
     'test' }}
   WIZ_ENV: "demo"
-  IMAGE_NAME: "${{ github.event.repository.name }}"
+  IMAGE_NAME: "sast-demo"
 
 jobs:
   build-and-scan:
