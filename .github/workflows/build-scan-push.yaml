@@ -43,6 +43,9 @@ env:
 jobs:
   build-and-scan:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./sast-demo
     strategy:
       matrix:
         dockerfile: [python]
