@@ -148,8 +148,8 @@ jobs:
             type=gha,scope=${{ env.IMAGE_NAME }}-${{ matrix.dockerfile }}-${{ env.DEPLOY_ENV }}
             type=gha,scope=${{ env.IMAGE_NAME }}-${{ matrix.dockerfile }}
           cache-to: type=gha,mode=max,scope=${{ env.IMAGE_NAME }}-${{ matrix.dockerfile }}-${{ env.DEPLOY_ENV }}
-          context: ./
-          file: ./dockerfiles/${{ matrix.dockerfile }}/Dockerfile
+          context: ${{ github.workspace }}/sast-demo
+          file: ${{ github.workspace }}/sast-demo/dockerfiles/${{ matrix.dockerfile }}/Dockerfile
           platforms: linux/amd64
           load: true
           push: false
@@ -241,7 +241,7 @@ jobs:
       - name: Upload SARIF file
         uses: github/codeql-action/upload-sarif@v4
         with:
-          sarif_file: ${{ env.IMAGE_NAME }}-${{ matrix.dockerfile }}-${{ github.run_id }}-sarif.json
+          sarif_file: ${{ github.workspace }}/sast-demo/${{ env.IMAGE_NAME }}-${{ matrix.dockerfile }}-${{ github.run_id }}-sarif.json
           category: wiz-${{ matrix.dockerfile }}
         continue-on-error: true
 
@@ -249,7 +249,7 @@ jobs:
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 #v5.0.0
         with:
           name: sbom-${{ env.IMAGE_NAME }}-${{ matrix.dockerfile }}-${{ github.run_id }}
-          path: ${{ env.IMAGE_NAME }}-${{ matrix.dockerfile }}-${{ github.run_id }}-sbom.json
+          path: ${{ github.workspace }}/sast-demo/${{ env.IMAGE_NAME }}-${{ matrix.dockerfile }}-${{ github.run_id }}-sbom.json
           retention-days: 30
         continue-on-error: true
 
