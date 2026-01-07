@@ -74,7 +74,7 @@ jobs:
           echo "sha256=$WIZCLI_SHA256" >> $GITHUB_OUTPUT
 
       - name: Cache Wiz CLI Binary
-        uses: actions/cache@v4
+        uses: actions/cache@9255dc7a253b0ccc959486e2bca901246202afeb  # v5.0.1
         with:
           path: ~/.wiz/wizcli
           key: ${{ runner.os }}-wizcli-${{ steps.get-sha256.outputs.sha256 }}
@@ -82,7 +82,7 @@ jobs:
             ${{ runner.os }}-wizcli-
 
       - name: Restore Wiz configuration and rules cache
-        uses: actions/cache@v4
+        uses: actions/cache@9255dc7a253b0ccc959486e2bca901246202afeb  # v5.0.1
         with:
           path: ~/.wiz/${{ (matrix.deploy_env == '' || matrix.deploy_env == 'app') && 'clusterFilesCache' || format('{0}_clusterFilesCache', matrix.deploy_env) }}
           key: ${{ runner.os }}-wiz-config-${{ matrix.deploy_env || 'default' }}-${{ matrix.tenant }}
@@ -140,7 +140,7 @@ jobs:
 
       - name: Cache Wiz configuration and rules
         if: always() && steps.get-cluster-sha256.outputs.cache_exists == 'true'
-        uses: actions/cache@v4
+        uses: actions/cache@9255dc7a253b0ccc959486e2bca901246202afeb  # v5.0.1
         with:
           path: ~/.wiz/${{ matrix.deploy_env }}_clusterFilesCache
           key: ${{ runner.os }}-wiz-config-${{ matrix.deploy_env }}-${{ matrix.tenant }}
@@ -150,14 +150,14 @@ jobs:
             ${{ runner.os }}-wiz-config-
 
       - name: Upload SARIF file
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: "${{ matrix.tenant }}-${{ github.run_id }}.json"
           category: wiz-${{ matrix.tenant }}
         continue-on-error: true
 
       - name: Upload SBOM file
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 #v5.0.0
         with:
           name: sbom-${{ matrix.tenant }}-${{ github.run_id }}
           path: "${{ matrix.tenant }}-${{ github.run_id }}-sbom.json"
