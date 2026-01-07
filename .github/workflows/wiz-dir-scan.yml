@@ -150,7 +150,7 @@ jobs:
             ${{ runner.os }}-wiz-config-
 
       - name: Upload SARIF file
-        uses: github/codeql-action/upload-sarif@v4
+        uses: github/codeql-action/upload-sarif@5d4e8d1aca955e8d8589aabd499c5cae939e33c7  # v4
         with:
           sarif_file: "${{ matrix.tenant }}-${{ github.run_id }}.json"
           category: wiz-${{ matrix.tenant }}
