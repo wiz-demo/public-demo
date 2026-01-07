@@ -3,17 +3,22 @@ name: Wiz CLI Multi-Tenant Directory Scan
 on:
   workflow_dispatch:
     inputs:
+      tenant:
+        description: 'Tenant to scan (leave empty to scan both)'
+        required: false
+        type: choice
+        options:
+        - advanced
+        - stgadvanced
       wizcli_version:
         description: 'Version of Wiz CLI to use for scanning'
         required: true
         default: '1.10.0'
-      tenants:
-        description: 'Comma-separated list of tenants to scan (e.g., staging,demo,production)'
-        required: false
-        default: 'staging,demo'
   push:
     branches:
       - main
+      - staging
+      - develop
   pull_request:
     branches:
       - main
@@ -22,8 +27,8 @@ on:
 
 permissions:
   contents: read
-  security-events: write
   actions: read
+  security-events: write
 
 jobs:
   WizCLI-Dir-Scan:
@@ -33,14 +38,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        tenant: [staging, demo]
+        tenant: [advanced, stgadvanced]
         include:
-          - tenant: staging
+          - tenant: stgadvanced
             deploy_env: demo
-            op_item: tenant_adv-stg-wizcli-sa
-          - tenant: demo
+            op_item: tenant_stgadvanced-wizcli-sa
+          - tenant: advanced
             deploy_env: demo
-            op_item: tenant_adv-prod-wizcli-sa
+            op_item: tenant_advanced-wizcli-sa
 
     steps:
       - name: Checkout
@@ -56,6 +61,7 @@ jobs:
         with:
           export-env: true
         env:
+          WIZCLI_URL: op://wiz-demo/${{ matrix.op_item }}/wizcliUrl
           WIZ_CLIENT_ID: op://wiz-demo/${{ matrix.op_item }}/username
           WIZ_CLIENT_SECRET: op://wiz-demo/${{ matrix.op_item }}/password
 
@@ -63,7 +69,7 @@ jobs:
         id: get-sha256
         run: |
           echo "Fetching Wiz CLI SHA256..."
-          WIZCLI_SHA256=$(curl -s https://downloads.wiz.io/experimental/v1/wizcli/latest/wizcli-linux-amd64-sha256)
+          WIZCLI_SHA256=$(curl -s ${{ env.WIZCLI_URL }}-sha256)
           echo "Wiz CLI SHA256: $WIZCLI_SHA256"
           echo "sha256=$WIZCLI_SHA256" >> $GITHUB_OUTPUT
 
@@ -75,7 +81,18 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-wizcli-
 
+      - name: Restore Wiz configuration and rules cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.wiz/${{ (matrix.deploy_env == '' || matrix.deploy_env == 'app') && 'clusterFilesCache' || format('{0}_clusterFilesCache', matrix.deploy_env) }}
+          key: ${{ runner.os }}-wiz-config-${{ matrix.deploy_env || 'default' }}-${{ matrix.tenant }}
+          restore-keys: |
+            ${{ runner.os }}-wiz-config-${{ matrix.deploy_env || 'default' }}-${{ matrix.tenant }}
+            ${{ runner.os }}-wiz-config-${{ matrix.deploy_env || 'default' }}-
+            ${{ runner.os }}-wiz-config-
+
       - name: Install Wiz CLI
+        if: success() || (failure() && matrix.deploy_env == 'develop')
         run: |
           if [ ! -f ~/.wiz/wizcli ]; then
             echo "Downloading Wiz CLI..."
@@ -85,17 +102,7 @@ jobs:
           else
             echo "Using cached Wiz CLI with SHA256: ${{ steps.get-sha256.outputs.sha256 }}"
           fi
-          echo "WIZCLI_PATH=~/.wiz/wizcli" >> $GITHUB_ENV
-
-      - name: Restore Wiz configuration and rules cache
-        uses: actions/cache@v4
-        with:
-          path: ~/.wiz/${{ matrix.deploy_env }}_clusterFilesCache
-          key: ${{ runner.os }}-wiz-config-${{ matrix.deploy_env }}-${{ matrix.tenant }}-${{ github.sha }}
-          restore-keys: |
-            ${{ runner.os }}-wiz-config-${{ matrix.deploy_env }}-${{ matrix.tenant }}-
-            ${{ runner.os }}-wiz-config-${{ matrix.deploy_env }}-
-            ${{ runner.os }}-wiz-config-
+          echo "WIZCLI_PATH=$HOME/.wiz/wizcli" >> $GITHUB_ENV
 
       - name: Run Wiz Security Scan
         run: |
@@ -112,24 +119,33 @@ jobs:
         id: get-cluster-sha256
         run: |
           echo "Checking for cluster files cache after scan..."
-          CACHE_DIR="$HOME/.wiz/${{ matrix.deploy_env }}_clusterFilesCache"
-          if [ -f "$CACHE_DIR/clusterFiles.tar.gz" ]; then
+          # Determine cache path based on deploy_env
+          if [ -z "${{ matrix.deploy_env }}" ] || [ "${{ matrix.deploy_env }}" = "app" ]; then
+            CACHE_DIR="$HOME/.wiz/clusterFilesCache"
+          else
+            CACHE_DIR="$HOME/.wiz/${{ matrix.deploy_env }}_clusterFilesCache"
+          fi
+          echo "Expected cache directory: $CACHE_DIR"
+
+          if [ -d "$CACHE_DIR" ] && [ -f "$CACHE_DIR/clusterFiles.tar.gz" ]; then
             CLUSTER_SHA256=$(sha256sum "$CACHE_DIR/clusterFiles.tar.gz" | cut -d' ' -f1)
             echo "Cluster files SHA256: $CLUSTER_SHA256"
             echo "sha256=$CLUSTER_SHA256" >> $GITHUB_OUTPUT
+            echo "cache_exists=true" >> $GITHUB_OUTPUT
           else
             echo "No cluster files cache found after scan"
             echo "sha256=no-cache" >> $GITHUB_OUTPUT
+            echo "cache_exists=false" >> $GITHUB_OUTPUT
           fi
 
       - name: Cache Wiz configuration and rules
-        if: always() && steps.get-cluster-sha256.outputs.sha256 != 'no-cache'
+        if: always() && steps.get-cluster-sha256.outputs.cache_exists == 'true'
         uses: actions/cache@v4
         with:
           path: ~/.wiz/${{ matrix.deploy_env }}_clusterFilesCache
-          key: ${{ runner.os }}-wiz-config-${{ matrix.deploy_env }}-${{ matrix.tenant }}-${{ github.sha }}
+          key: ${{ runner.os }}-wiz-config-${{ matrix.deploy_env }}-${{ matrix.tenant }}
           restore-keys: |
-            ${{ runner.os }}-wiz-config-${{ matrix.deploy_env }}-${{ matrix.tenant }}-
+            ${{ runner.os }}-wiz-config-${{ matrix.deploy_env }}-${{ matrix.tenant }}
             ${{ runner.os }}-wiz-config-${{ matrix.deploy_env }}-
             ${{ runner.os }}-wiz-config-
 
