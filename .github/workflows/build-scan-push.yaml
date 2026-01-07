@@ -88,7 +88,7 @@ jobs:
           echo "sha256=$WIZCLI_SHA256" >> $GITHUB_OUTPUT
 
       - name: Cache Wiz CLI Binary
-        uses: actions/cache@v4
+        uses: actions/cache@9255dc7a253b0ccc959486e2bca901246202afeb  # v5.0.1
         with:
           path: ~/.wiz/wizcli
           key: ${{ runner.os }}-wizcli-${{ steps.get-sha256.outputs.sha256 }}
@@ -96,7 +96,7 @@ jobs:
             ${{ runner.os }}-wizcli-
 
       - name: Restore Wiz configuration and rules cache
-        uses: actions/cache@v4
+        uses: actions/cache@9255dc7a253b0ccc959486e2bca901246202afeb  # v5.0.1
         with:
           path: ~/.wiz/${{ (env.WIZ_ENV == '' || env.WIZ_ENV == 'app') && 'clusterFilesCache' || format('{0}_clusterFilesCache', env.WIZ_ENV) }}
           key: ${{ runner.os }}-wiz-config-${{ env.WIZ_ENV || 'default' }}-${{ env.DEPLOY_ENV }}
@@ -230,7 +230,7 @@ jobs:
 
       - name: Cache Wiz configuration and rules
         if: always() && steps.get-cluster-sha256.outputs.cache_exists == 'true'
-        uses: actions/cache@v4
+        uses: actions/cache@9255dc7a253b0ccc959486e2bca901246202afeb  # v5.0.1
         with:
           path: ~/.wiz/${{ (env.WIZ_ENV == '' || env.WIZ_ENV == 'app') && 'clusterFilesCache' || format('{0}_clusterFilesCache', env.WIZ_ENV) }}
           key: ${{ runner.os }}-wiz-config-${{ env.WIZ_ENV || 'default' }}-${{ matrix.dockerfile }}-${{ env.DEPLOY_ENV }}
@@ -240,7 +240,7 @@ jobs:
             ${{ runner.os }}-wiz-config-${{ matrix.dockerfile }}-
 
       - name: Upload SARIF file
-        uses: github/codeql-action/upload-sarif@v4
+        uses: github/codeql-action/upload-sarif@5d4e8d1aca955e8d8589aabd499c5cae939e33c7  # v4
         with:
           sarif_file: ${{ github.workspace }}/sast-demo/${{ env.IMAGE_NAME }}-${{ matrix.dockerfile }}-${{ github.run_id }}-sarif.json
           category: wiz-${{ matrix.dockerfile }}
