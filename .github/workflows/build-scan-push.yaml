@@ -70,10 +70,10 @@ jobs:
           WIF_SERVICE_ACCOUNT: op://wiz-demo/gar_${{ env.DEPLOY_ENV }}-registry/pusherServiceAccount
           WIZ_CLIENT_ID: op://wiz-demo/tenant_${{ env.DEPLOY_ENV}}-wizcli-sa/username
           WIZ_CLIENT_SECRET: op://wiz-demo/tenant_${{ env.DEPLOY_ENV }}-wizcli-sa/password
-          WIZCLI_URL: op://wiz-demo/tenant_${{ env.DEPLOY_ENV }}-wizcli-sa//wizcliUrl
-          WIZ_OS_REGISTRY: op://wiz-demo/tenant_csatest-wizos-registry-credentials/registryUrl           # Has to stay here until we get registry credentials in demo tenants
-          WIZ_OS_USER: op://wiz-demo/tenant_csatest-wizos-registry-credentials/username                  # Has to stay here until we get registry credentials in demo tenants
-          WIZ_OS_PASSWORD: op://wiz-demo/tenant_csatest-wizos-registry-credentials/credential
+          WIZCLI_URL: op://wiz-demo/tenant_${{ env.DEPLOY_ENV }}-wizcli-sa/wizcliUrl
+          WIZ_OS_REGISTRY: op://wiz-demo/tenant_${{ env.DEPLOY_ENV == 'stgadvanced' && 'adv-stg' || 'adv-prod' }}-tenant-info/wizOsRegistryUrl
+          WIZ_OS_USER: op://wiz-demo/tenant_${{ env.DEPLOY_ENV == 'stgadvanced' && 'adv-stg' || 'adv-prod' }}-tenant-info/wizOsRegistryUsername
+          WIZ_OS_PASSWORD: op://wiz-demo/tenant_${{ env.DEPLOY_ENV == 'stgadvanced' && 'adv-stg' || 'adv-prod' }}-tenant-info/wizOsRegistryPassword
           WIZ_OS_CLIENT_ID: op://wiz-demo/tenant_${{ env.DEPLOY_ENV }}-wizos-apk-credentials/username
           WIZ_OS_CLIENT_SECRET: op://wiz-demo/tenant_${{ env.DEPLOY_ENV }}-wizos-apk-credentials/credential
           # WIZ_OS_CLIENT_ID: op://wiz-demo/tenant_adv-${{ env.DEPLOY_ENV == 'staging' && 'stg-' || '' }}-wizos-apk-credentials/username
@@ -157,9 +157,6 @@ jobs:
             ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAME }}-${{ matrix.dockerfile }}:${{ vars.IMAGE_TAG }}
             ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAME }}-${{ matrix.dockerfile }}:${{ env.DEPLOY_ENV }}-${{ github.sha }}
           labels: ${{ steps.meta.outputs.labels }}
-          secrets: |
-            ${{ matrix.dockerfile == 'wizos' && 'id=WIZOS_CLIENT_ID,env=WIZ_OS_CLIENT_ID' || '' }}
-            ${{ matrix.dockerfile == 'wizos' && 'id=WIZOS_CLIENT_SECRET,env=WIZ_OS_CLIENT_SECRET' || '' }}
         continue-on-error: ${{ env.DEPLOY_ENV == 'develop' }}
 
       - name: Install Wiz CLI
@@ -189,18 +186,22 @@ jobs:
         continue-on-error: ${{ env.DEPLOY_ENV == 'develop' }}
 
       - name: Push Docker Image (After Scan Pass)
+        id: push
         if: success() || (failure() && env.DEPLOY_ENV == 'develop')
         run: |
           echo "Pushing pre-built image to registry..."
           docker push "${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAME }}-${{ matrix.dockerfile }}:${{ vars.IMAGE_TAG }}"
           docker push "${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAME }}-${{ matrix.dockerfile }}:${{ env.DEPLOY_ENV }}-${{ github.sha }}"
+          REGISTRY_DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAME }}-${{ matrix.dockerfile }}:${{ vars.IMAGE_TAG }} | cut -d'@' -f2)
+          echo "Registry digest: $REGISTRY_DIGEST"
+          echo "digest=$REGISTRY_DIGEST" >> $GITHUB_OUTPUT
         continue-on-error: ${{ env.DEPLOY_ENV == 'develop' }}
 
       - name: Tag Image in Wiz (After Push)
         if: success() || (failure() && env.DEPLOY_ENV == 'develop')
         run: |
           echo "Tagging image in Wiz with digest..."
-          sudo -E ${{ env.WIZCLI_PATH }} tag "${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAME }}-${{ matrix.dockerfile }}:${{ vars.IMAGE_TAG }}" --digest "${{ steps.build-image.outputs.digest }}"
+          sudo -E ${{ env.WIZCLI_PATH }} tag "${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAME }}-${{ matrix.dockerfile }}:${{ vars.IMAGE_TAG }}" --digest "${{ steps.push.outputs.digest }}"
         continue-on-error: ${{ env.DEPLOY_ENV == 'develop' }}
 
       - name: Get Cluster Files Cache SHA256
@@ -235,13 +236,13 @@ jobs:
           key: ${{ runner.os }}-wiz-config-${{ env.WIZ_ENV || 'default' }}-${{ matrix.dockerfile }}-${{ env.DEPLOY_ENV }}
           restore-keys: |
             ${{ runner.os }}-wiz-config-${{ env.WIZ_ENV || 'default' }}-${{ matrix.dockerfile }}-${{ env.DEPLOY_ENV }}
-            ${{ runner.os }}-wiz-config-${{ env.WIZ_ENV || 'default' }}-
-            ${{ runner.os }}-wiz-config-
+            ${{ runner.os }}-wiz-config-${{ env.WIZ_ENV || 'default' }}-${{ matrix.dockerfile }}-
+            ${{ runner.os }}-wiz-config-${{ matrix.dockerfile }}-
 
       - name: Upload SARIF file
         uses: github/codeql-action/upload-sarif@v4
         with:
-          sarif_file: ${{ github.workspace }}/sast-demo/${{ env.IMAGE_NAME }}-${{ matrix.dockerfile }}-${{ github.run_id }}-sarif.json
+          sarif_file: ${{ env.IMAGE_NAME }}-${{ matrix.dockerfile }}-${{ github.run_id }}-sarif.json
           category: wiz-${{ matrix.dockerfile }}
         continue-on-error: true
 
@@ -249,7 +250,7 @@ jobs:
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 #v5.0.0
         with:
           name: sbom-${{ env.IMAGE_NAME }}-${{ matrix.dockerfile }}-${{ github.run_id }}
-          path: ${{ github.workspace }}/sast-demo/${{ env.IMAGE_NAME }}-${{ matrix.dockerfile }}-${{ github.run_id }}-sbom.json
+          path: ${{ env.IMAGE_NAME }}-${{ matrix.dockerfile }}-${{ github.run_id }}-sbom.json
           retention-days: 30
         continue-on-error: true
 
