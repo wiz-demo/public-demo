@@ -92,8 +92,6 @@ jobs:
         with:
           path: ~/.wiz/wizcli
           key: ${{ runner.os }}-wizcli-${{ steps.get-sha256.outputs.sha256 }}
-          restore-keys: |
-            ${{ runner.os }}-wizcli-
 
       - name: Restore Wiz configuration and rules cache
         uses: actions/cache@9255dc7a253b0ccc959486e2bca901246202afeb  # v5.0.1
