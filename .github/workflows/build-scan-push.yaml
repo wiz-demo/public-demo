@@ -160,14 +160,39 @@ jobs:
       - name: Install Wiz CLI
         if: success() || (failure() && env.DEPLOY_ENV == 'develop')
         run: |
-          if [ ! -f ~/.wiz/wizcli ]; then
-            echo "Downloading Wiz CLI..."
-            mkdir -p ~/.wiz
-            curl -o ~/.wiz/wizcli ${{ env.WIZCLI_URL }} && chmod +x ~/.wiz/wizcli
-            echo "Downloaded Wiz CLI with SHA256: ${{ steps.get-sha256.outputs.sha256 }}"
+          mkdir -p ~/.wiz
+          EXPECTED_SHA256="${{ steps.get-sha256.outputs.sha256 }}"
+          NEEDS_DOWNLOAD=false
+
+          if [ -f ~/.wiz/wizcli ]; then
+            echo "Cached Wiz CLI found, verifying SHA256..."
+            ACTUAL_SHA256=$(sha256sum ~/.wiz/wizcli | cut -d' ' -f1)
+            if [ "$ACTUAL_SHA256" = "$EXPECTED_SHA256" ]; then
+              echo "✓ Cached Wiz CLI SHA256 matches expected: $EXPECTED_SHA256"
+            else
+              echo "✗ Cached Wiz CLI SHA256 mismatch!"
+              echo "  Expected: $EXPECTED_SHA256"
+              echo "  Actual:   $ACTUAL_SHA256"
+              echo "  Re-downloading latest version..."
+              NEEDS_DOWNLOAD=true
+            fi
           else
-            echo "Using cached Wiz CLI with SHA256: ${{ steps.get-sha256.outputs.sha256 }}"
+            echo "No cached Wiz CLI found, downloading..."
+            NEEDS_DOWNLOAD=true
           fi
+
+          if [ "$NEEDS_DOWNLOAD" = true ]; then
+            curl -o ~/.wiz/wizcli ${{ env.WIZCLI_URL }} && chmod +x ~/.wiz/wizcli
+            DOWNLOADED_SHA256=$(sha256sum ~/.wiz/wizcli | cut -d' ' -f1)
+            echo "Downloaded Wiz CLI with SHA256: $DOWNLOADED_SHA256"
+            if [ "$DOWNLOADED_SHA256" != "$EXPECTED_SHA256" ]; then
+              echo "::error::Downloaded Wiz CLI SHA256 does not match expected!"
+              echo "::error::Expected: $EXPECTED_SHA256"
+              echo "::error::Got:      $DOWNLOADED_SHA256"
+              exit 1
+            fi
+          fi
+
           echo "WIZCLI_PATH=$HOME/.wiz/wizcli" >> $GITHUB_ENV
 
       - name: Run Wiz Security Scan
