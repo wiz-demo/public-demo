@@ -1,0 +1,241 @@
+name: Malicious Packages Scan & Build
+
+on:
+  schedule:
+    # Run weekly on Mondays at 9:00 AM UTC (runs on default branch 'main' only)
+    - cron: '0 9 * * 1'
+  push:
+    branches:
+      - main
+      - mal-packages-scan
+    paths:
+      - 'horse-demo/**'
+      - '.github/workflows/malicious-packages-scan.yml'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'horse-demo/**'
+      - '.github/workflows/malicious-packages-scan.yml'
+  workflow_dispatch:
+    inputs:
+      wizcli_version:
+        description: 'Version of Wiz CLI to use for scanning'
+        required: false
+        default: 'latest'
+
+permissions:
+  contents: read
+  actions: read
+  security-events: write
+
+env:
+  DEPLOY_ENV: advanced
+  WIZ_ENV: demo
+  IMAGE_NAME: horse-demo
+  IMAGE_TAG: latest
+
+jobs:
+  scan-and-build:
+    name: Scan & Build (${{ matrix.branch }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        branch:
+          - main
+          - mal-packages-scan
+    defaults:
+      run:
+        working-directory: ./horse-demo
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11  # v4
+        with:
+          ref: ${{ matrix.branch }}
+
+      - name: Configure 1Password Service Account
+        uses: 1password/load-secrets-action/configure@581a835fb51b8e7ec56b71cf2ffddd7e68bb25e0
+        with:
+          service-account-token: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
+
+      - name: Load Environment Secrets
+        uses: 1password/load-secrets-action@581a835fb51b8e7ec56b71cf2ffddd7e68bb25e0
+        with:
+          export-env: true
+        env:
+          WIZ_CLIENT_ID: op://wiz-demo/tenant_${{ env.DEPLOY_ENV }}-wizcli-sa/username
+          WIZ_CLIENT_SECRET: op://wiz-demo/tenant_${{ env.DEPLOY_ENV }}-wizcli-sa/password
+          WIZCLI_URL: op://wiz-demo/tenant_${{ env.DEPLOY_ENV }}-wizcli-sa/wizcliUrl
+
+      - name: Setup Node.js
+        uses: actions/setup-node@60edb5dd545a775178f52524783378180af0d1f8  # v4
+        with:
+          node-version: '22'
+
+      # ============================================
+      # Step 1: Scan directory for malicious packages BEFORE building
+      # ============================================
+      - name: Get Wiz CLI SHA256
+        id: get-sha256
+        run: |
+          echo "Fetching Wiz CLI SHA256..."
+          WIZCLI_SHA256=$(curl -s ${{ env.WIZCLI_URL }}-sha256)
+          echo "Wiz CLI SHA256: $WIZCLI_SHA256"
+          echo "sha256=$WIZCLI_SHA256" >> $GITHUB_OUTPUT
+
+      - name: Cache Wiz CLI Binary
+        uses: actions/cache@9255dc7a253b0ccc959486e2bca901246202afeb  # v5.0.1
+        with:
+          path: ~/.wiz/wizcli
+          key: ${{ runner.os }}-wizcli-${{ steps.get-sha256.outputs.sha256 }}
+          restore-keys: |
+            ${{ runner.os }}-wizcli-
+
+      - name: Restore Wiz configuration and rules cache
+        uses: actions/cache@9255dc7a253b0ccc959486e2bca901246202afeb  # v5.0.1
+        with:
+          path: ~/.wiz/${{ env.WIZ_ENV }}_clusterFilesCache
+          key: ${{ runner.os }}-wiz-config-${{ env.WIZ_ENV }}-${{ env.DEPLOY_ENV }}
+          restore-keys: |
+            ${{ runner.os }}-wiz-config-${{ env.WIZ_ENV }}-${{ env.DEPLOY_ENV }}
+            ${{ runner.os }}-wiz-config-${{ env.WIZ_ENV }}-
+            ${{ runner.os }}-wiz-config-
+
+      - name: Install Wiz CLI
+        run: |
+          mkdir -p ~/.wiz
+          EXPECTED_SHA256="${{ steps.get-sha256.outputs.sha256 }}"
+          NEEDS_DOWNLOAD=false
+
+          if [ -f ~/.wiz/wizcli ]; then
+            echo "Cached Wiz CLI found, verifying SHA256..."
+            ACTUAL_SHA256=$(sha256sum ~/.wiz/wizcli | cut -d' ' -f1)
+            if [ "$ACTUAL_SHA256" = "$EXPECTED_SHA256" ]; then
+              echo "✓ Cached Wiz CLI SHA256 matches expected: $EXPECTED_SHA256"
+            else
+              echo "✗ Cached Wiz CLI SHA256 mismatch!"
+              echo "  Expected: $EXPECTED_SHA256"
+              echo "  Actual:   $ACTUAL_SHA256"
+              echo "  Re-downloading latest version..."
+              NEEDS_DOWNLOAD=true
+            fi
+          else
+            echo "No cached Wiz CLI found, downloading..."
+            NEEDS_DOWNLOAD=true
+          fi
+
+          if [ "$NEEDS_DOWNLOAD" = true ]; then
+            curl -o ~/.wiz/wizcli ${{ env.WIZCLI_URL }} && chmod +x ~/.wiz/wizcli
+            DOWNLOADED_SHA256=$(sha256sum ~/.wiz/wizcli | cut -d' ' -f1)
+            echo "Downloaded Wiz CLI with SHA256: $DOWNLOADED_SHA256"
+            if [ "$DOWNLOADED_SHA256" != "$EXPECTED_SHA256" ]; then
+              echo "::error::Downloaded Wiz CLI SHA256 does not match expected!"
+              echo "::error::Expected: $EXPECTED_SHA256"
+              echo "::error::Got:      $DOWNLOADED_SHA256"
+              exit 1
+            fi
+          fi
+
+          echo "WIZCLI_PATH=$HOME/.wiz/wizcli" >> $GITHUB_ENV
+
+      - name: Scan directory for malicious packages (Pre-Build)
+        run: |
+          echo "=== Scanning directory for malicious packages BEFORE container build ==="
+          echo "Branch: ${{ matrix.branch }}"
+          sudo -E ${{ env.WIZCLI_PATH }} scan dir "." \
+            --name "horse-demo-${{ matrix.branch }}-pre-build-${{ github.run_id }}" \
+            --tag github_action_run_id=${{ github.run_id }} \
+            --tag scan_stage=pre-build \
+            --tag branch=${{ matrix.branch }} \
+            --tag environment=${{ env.DEPLOY_ENV }} \
+            --policies "Wiz Malicious Packages Policy - Block" \
+            --disabled-scanners SAST \
+            --sarif-output-file "pre-build-sarif.json" \
+            --sbom-format spdx-json \
+            --sbom-output-file "pre-build-sbom.json"
+        env:
+          WIZ_ENV: ${{ env.WIZ_ENV }}
+        continue-on-error: false
+
+      # ============================================
+      # Step 2: Build Docker container
+      # ============================================
+      - name: Install npm dependencies
+        run: |
+          echo "=== Installing npm dependencies ==="
+          npm ci
+
+      - name: Build Docker container
+        run: |
+          echo "=== Building Docker container ==="
+          docker build -t ${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }} .
+          echo "Docker image built successfully"
+
+      # ============================================
+      # Step 3: Scan container image AFTER building
+      # ============================================
+      - name: Scan container image for malicious packages (Post-Build)
+        run: |
+          echo "=== Scanning container image for malicious packages AFTER build ==="
+          echo "Branch: ${{ matrix.branch }}"
+          sudo -E ${{ env.WIZCLI_PATH }} scan container-image "${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}" \
+            --name "horse-demo-${{ matrix.branch }}-post-build-${{ github.run_id }}" \
+            --dockerfile "./Dockerfile" \
+            --tag github_action_run_id=${{ github.run_id }} \
+            --tag scan_stage=post-build \
+            --tag branch=${{ matrix.branch }} \
+            --tag environment=${{ env.DEPLOY_ENV }} \
+            --policies "Wiz Malicious Packages Policy - Block" \
+            --sarif-output-file "post-build-sarif.json" \
+            --sbom-format spdx-json \
+            --sbom-output-file "post-build-sbom.json"
+        env:
+          WIZ_ENV: ${{ env.WIZ_ENV }}
+        continue-on-error: false
+
+      # ============================================
+      # Step 4: Cache Wiz configuration and upload scan results
+      # ============================================
+      - name: Cache Wiz configuration and rules
+        if: always()
+        uses: actions/cache@9255dc7a253b0ccc959486e2bca901246202afeb  # v5.0.1
+        with:
+          path: ~/.wiz/${{ env.WIZ_ENV }}_clusterFilesCache
+          key: ${{ runner.os }}-wiz-config-${{ env.WIZ_ENV }}-${{ env.DEPLOY_ENV }}
+          restore-keys: |
+            ${{ runner.os }}-wiz-config-${{ env.WIZ_ENV }}-${{ env.DEPLOY_ENV }}
+            ${{ runner.os }}-wiz-config-${{ env.WIZ_ENV }}-
+            ${{ runner.os }}-wiz-config-
+
+      - name: Upload Pre-Build SARIF file
+        uses: github/codeql-action/upload-sarif@5d4e8d1aca955e8d8589aabd499c5cae939e33c7  # v4
+        with:
+          sarif_file: ${{ github.workspace }}/horse-demo/pre-build-sarif.json
+          category: wiz-malicious-packages-pre-build
+        continue-on-error: true
+
+      - name: Upload Post-Build SARIF file
+        uses: github/codeql-action/upload-sarif@5d4e8d1aca955e8d8589aabd499c5cae939e33c7  # v4
+        with:
+          sarif_file: ${{ github.workspace }}/horse-demo/post-build-sarif.json
+          category: wiz-malicious-packages-post-build
+        continue-on-error: true
+
+      - name: Upload Pre-Build SBOM
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4  # v5.0.0
+        with:
+          name: sbom-pre-build-${{ github.run_id }}
+          path: ${{ github.workspace }}/horse-demo/pre-build-sbom.json
+          retention-days: 30
+        continue-on-error: true
+
+      - name: Upload Post-Build SBOM
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4  # v5.0.0
+        with:
+          name: sbom-post-build-${{ github.run_id }}
+          path: ${{ github.workspace }}/horse-demo/post-build-sbom.json
+          retention-days: 30
+        continue-on-error: true
+

@@ -1,0 +1,21 @@
+{
+  "name": "trojan-horse-demo",
+  "version": "1.0.0",
+  "description": "Beautiful Trojan Horse Demo with Node.js",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": ["trojan", "horse", "demo", "express"],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "synckit": "0.11.12",
+    "is": "3.3.2",
+    "eslint-plugin-prettier": "5.5.5",
+    "express": "5.2.1"
+  }
+}
+
