@@ -68,14 +68,14 @@ jobs:
           REGISTRY_REGION: op://wiz-demo/gar_${{ env.DEPLOY_ENV }}-registry/registryRegion
           WIF_PROVIDER: op://wiz-demo/gar_${{ env.DEPLOY_ENV }}-registry/workloadIdentityProvider
           WIF_SERVICE_ACCOUNT: op://wiz-demo/gar_${{ env.DEPLOY_ENV }}-registry/pusherServiceAccount
-          WIZ_CLIENT_ID: op://wiz-demo/tenant_${{ env.DEPLOY_ENV}}-wizcli-sa/username
-          WIZ_CLIENT_SECRET: op://wiz-demo/tenant_${{ env.DEPLOY_ENV }}-wizcli-sa/password
-          WIZCLI_URL: op://wiz-demo/tenant_${{ env.DEPLOY_ENV }}-wizcli-sa/wizcliUrl
-          WIZ_OS_REGISTRY: op://wiz-demo/tenant_${{ env.DEPLOY_ENV == 'stgadvanced' && 'adv-stg' || 'adv-prod' }}-tenant-info/wizOsRegistryUrl
-          WIZ_OS_USER: op://wiz-demo/tenant_${{ env.DEPLOY_ENV == 'stgadvanced' && 'adv-stg' || 'adv-prod' }}-tenant-info/wizOsRegistryUsername
-          WIZ_OS_PASSWORD: op://wiz-demo/tenant_${{ env.DEPLOY_ENV == 'stgadvanced' && 'adv-stg' || 'adv-prod' }}-tenant-info/wizOsRegistryPassword
-          WIZ_OS_CLIENT_ID: op://wiz-demo/tenant_${{ env.DEPLOY_ENV }}-wizos-apk-credentials/username
-          WIZ_OS_CLIENT_SECRET: op://wiz-demo/tenant_${{ env.DEPLOY_ENV }}-wizos-apk-credentials/credential
+          WIZ_CLIENT_ID: op://wiz-demo/tenant_${{ env.DEPLOY_ENV == 'stgadvanced' && 'stg-advanced' || env.DEPLOY_ENV }}-wizcli-sa/username
+          WIZ_CLIENT_SECRET: op://wiz-demo/tenant_${{ env.DEPLOY_ENV == 'stgadvanced' && 'stg-advanced' || env.DEPLOY_ENV }}-wizcli-sa/password
+          WIZCLI_URL: op://wiz-demo/tenant_${{ env.DEPLOY_ENV == 'stgadvanced' && 'stg-advanced' || env.DEPLOY_ENV }}-wizcli-sa/wizcliUrl
+          WIZ_OS_REGISTRY: op://wiz-demo/tenant_${{ env.DEPLOY_ENV == 'stgadvanced' && 'stg-advanced' || 'advanced' }}-tenant-info/wizOsRegistryUrl
+          WIZ_OS_USER: op://wiz-demo/tenant_${{ env.DEPLOY_ENV == 'stgadvanced' && 'stg-advanced' || 'advanced' }}-tenant-info/wizOsRegistryUsername
+          WIZ_OS_PASSWORD: op://wiz-demo/tenant_${{ env.DEPLOY_ENV == 'stgadvanced' && 'stg-advanced' || 'advanced' }}-tenant-info/wizOsRegistryPassword
+          WIZ_OS_CLIENT_ID: op://wiz-demo/tenant_${{ env.DEPLOY_ENV == 'stgadvanced' && 'stg-advanced' || env.DEPLOY_ENV }}-wizos-apk-credentials/username
+          WIZ_OS_CLIENT_SECRET: op://wiz-demo/tenant_${{ env.DEPLOY_ENV == 'stgadvanced' && 'stg-advanced' || env.DEPLOY_ENV }}-wizos-apk-credentials/credential
           # WIZ_OS_CLIENT_ID: op://wiz-demo/tenant_adv-${{ env.DEPLOY_ENV == 'staging' && 'stg-' || '' }}-wizos-apk-credentials/username
           # WIZ_OS_CLIENT_SECRET: op://wiz-demo/tenant_adv-${{ env.DEPLOY_ENV == 'staging' && 'stg-' || '' }}-wizos-apk-credentials/credential
 

@@ -40,7 +40,7 @@ jobs:
         include:
           - tenant: stgadvanced
             deploy_env: demo
-            op_item: tenant_stgadvanced-wizcli-sa
+            op_item: tenant_stg-advanced-wizcli-sa
           - tenant: advanced
             deploy_env: demo
             op_item: tenant_advanced-wizcli-sa
