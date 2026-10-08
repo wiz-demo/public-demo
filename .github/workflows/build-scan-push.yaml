@@ -36,9 +36,13 @@ env:
     (github.ref == 'refs/heads/main' && 'advanced') ||
     (github.ref == 'refs/heads/develop' && 'stgadvanced') ||
     (github.ref == 'refs/heads/staging' && 'stgadvanced') ||
-    'test' }}
+    'stgadvanced' }}
   WIZ_ENV: "demo"
   IMAGE_NAME: "sast-demo"
+  IMAGE_REGISTRY: ${{ ((github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'advanced') || github.ref == 'refs/heads/main') && vars.GAR_PRODUCTION_REGISTRY || vars.GAR_STAGING_REGISTRY }}
+  REGISTRY_REGION: ${{ ((github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'advanced') || github.ref == 'refs/heads/main') && vars.GAR_PRODUCTION_REGION || vars.GAR_STAGING_REGION }}
+  WIF_PROVIDER: ${{ ((github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'advanced') || github.ref == 'refs/heads/main') && vars.GAR_PRODUCTION_WIF_PROVIDER || vars.GAR_STAGING_WIF_PROVIDER }}
+  WIF_SERVICE_ACCOUNT: ${{ ((github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'advanced') || github.ref == 'refs/heads/main') && vars.GAR_PRODUCTION_SERVICE_ACCOUNT || vars.GAR_STAGING_SERVICE_ACCOUNT }}
 
 jobs:
   build-and-scan:
@@ -54,30 +58,60 @@ jobs:
       - name: Checkout
         uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11
 
-      - name: Configure 1Password Service Account
-        uses: 1password/load-secrets-action/configure@581a835fb51b8e7ec56b71cf2ffddd7e68bb25e0
+      - name: Authenticate to Google Cloud
+        id: auth
+        uses: google-github-actions/auth@ba79af03959ebeac9769e648f473a284504d9193
         with:
-          service-account-token: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.WIF_SERVICE_ACCOUNT }}
 
-      - name: Load Environment Secrets
-        uses: 1password/load-secrets-action@581a835fb51b8e7ec56b71cf2ffddd7e68bb25e0
-        with:
-          export-env: true
-        env:
-          IMAGE_REGISTRY: op://wiz-demo/gar_${{ env.DEPLOY_ENV }}-registry/registryUrl
-          REGISTRY_REGION: op://wiz-demo/gar_${{ env.DEPLOY_ENV }}-registry/registryRegion
-          WIF_PROVIDER: op://wiz-demo/gar_${{ env.DEPLOY_ENV }}-registry/workloadIdentityProvider
-          WIF_SERVICE_ACCOUNT: op://wiz-demo/gar_${{ env.DEPLOY_ENV }}-registry/pusherServiceAccount
-          WIZ_CLIENT_ID: op://wiz-demo/tenant_${{ env.DEPLOY_ENV }}-wizcli-sa/username
-          WIZ_CLIENT_SECRET: op://wiz-demo/tenant_${{ env.DEPLOY_ENV }}-wizcli-sa/password
-          WIZCLI_URL: op://wiz-demo/tenant_${{ env.DEPLOY_ENV }}-wizcli-sa/wizcliUrl
-          WIZ_OS_REGISTRY: op://wiz-demo/tenant_${{ env.DEPLOY_ENV }}-tenant-info/wizOsRegistryUrl
-          WIZ_OS_USER: op://wiz-demo/tenant_${{ env.DEPLOY_ENV }}-tenant-info/wizOsRegistryUsername
-          WIZ_OS_PASSWORD: op://wiz-demo/tenant_${{ env.DEPLOY_ENV }}-tenant-info/wizOsRegistryPassword
-          WIZ_OS_CLIENT_ID: op://wiz-demo/tenant_${{ env.DEPLOY_ENV }}-wizos-apk-credentials/username
-          WIZ_OS_CLIENT_SECRET: op://wiz-demo/tenant_${{ env.DEPLOY_ENV }}-wizos-apk-credentials/credential
-          # WIZ_OS_CLIENT_ID: op://wiz-demo/tenant_adv-${{ env.DEPLOY_ENV == 'staging' && 'stg-' || '' }}-wizos-apk-credentials/username
-          # WIZ_OS_CLIENT_SECRET: op://wiz-demo/tenant_adv-${{ env.DEPLOY_ENV == 'staging' && 'stg-' || '' }}-wizos-apk-credentials/credential
+      - name: Load Environment Secrets from GCP Secret Manager
+        shell: bash
+        run: |
+          set -euo pipefail
+          wiz_json="$(gcloud secrets versions access latest \
+            --project=demosecrets \
+            --secret="tenant_${DEPLOY_ENV}-wizcli-sa")"
+          for mapping in \
+            "WIZ_CLIENT_ID:username" \
+            "WIZ_CLIENT_SECRET:password" \
+            "WIZCLI_URL:wizcliUrl"; do
+            env_name="${mapping%%:*}"
+            field_name="${mapping##*:}"
+            value="$(jq -r --arg field "${field_name}" '.[$field]' \
+              <<<"${wiz_json}")"
+            echo "::add-mask::${value}"
+            echo "${env_name}=${value}" >>"${GITHUB_ENV}"
+          done
+
+          tenant_info_json="$(gcloud secrets versions access latest \
+            --project=demosecrets \
+            --secret="tenant_${DEPLOY_ENV}-tenant-info")"
+          for mapping in \
+            "WIZ_OS_REGISTRY:wizOsRegistryUrl" \
+            "WIZ_OS_USER:wizOsRegistryUsername" \
+            "WIZ_OS_PASSWORD:wizOsRegistryPassword"; do
+            env_name="${mapping%%:*}"
+            field_name="${mapping##*:}"
+            value="$(jq -r --arg field "${field_name}" '.[$field]' \
+              <<<"${tenant_info_json}")"
+            echo "::add-mask::${value}"
+            echo "${env_name}=${value}" >>"${GITHUB_ENV}"
+          done
+
+          wizos_apk_json="$(gcloud secrets versions access latest \
+            --project=demosecrets \
+            --secret="tenant_${DEPLOY_ENV}-wizos-apk-credentials")"
+          for mapping in \
+            "WIZ_OS_CLIENT_ID:username" \
+            "WIZ_OS_CLIENT_SECRET:credential"; do
+            env_name="${mapping%%:*}"
+            field_name="${mapping##*:}"
+            value="$(jq -r --arg field "${field_name}" '.[$field]' \
+              <<<"${wizos_apk_json}")"
+            echo "::add-mask::${value}"
+            echo "${env_name}=${value}" >>"${GITHUB_ENV}"
+          done
 
       - name: Get Wiz CLI SHA256
         id: get-sha256
@@ -118,13 +152,6 @@ jobs:
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=raw,value=${{ env.DEPLOY_ENV }}-${{ matrix.dockerfile }}-{{sha}}
-
-      - name: Authenticate to Google Cloud
-        id: auth
-        uses: google-github-actions/auth@ba79af03959ebeac9769e648f473a284504d9193
-        with:
-          workload_identity_provider: ${{ env.WIF_PROVIDER }}
-          service_account: ${{ env.WIF_SERVICE_ACCOUNT }}
 
       - name: Login to Container Registry
         run: gcloud auth configure-docker ${{ env.REGISTRY_REGION }}-docker.pkg.dev
@@ -282,11 +309,6 @@ jobs:
         run: |
           echo "::error::Build failed for develop environment"
           echo "::error::This may be due to ephemeral GAR registry issues. Please check:"
-          echo "::error::  1. Does the 'scenarios_gar-registry-develop' entry exist in 1Password?"
-          echo "::error::  2. Does the GAR registry referenced in 1Password still exist?"
-          echo "::error::  3. Are the credentials in 1Password still valid?"
-          echo "::error::"
-          echo "::error::If the develop GAR registry was deleted, you may need to:"
-          echo "::error::  - Create a new develop GAR registry"
-          echo "::error::  - Update the 'scenarios_gar-registry-develop' entry in 1Password with new registry details"
-          echo "::error::  - Or remove the 1Password entry if develop environment is no longer needed"
+          echo "::error::  1. Does the 'scenarios_gar-registry-develop' secret exist in GCP Secret Manager (demosecrets)?"
+          echo "::error::  2. Does the GAR registry referenced in GCP Secret Manager still exist?"
+          echo "::error::  3. Are the credentials in GCP Secret Manager still valid?"

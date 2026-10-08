@@ -25,6 +25,7 @@ on:
 
 permissions:
   contents: read
+  id-token: write
   actions: read
   security-events: write
 
@@ -33,6 +34,8 @@ jobs:
     runs-on: ubuntu-latest
     env:
       WIZCLI_URL: https://downloads.wiz.io/experimental/v1/wizcli/latest/wizcli-linux-amd64
+      WIF_PROVIDER: ${{ matrix.tenant == 'advanced' && vars.GAR_PRODUCTION_WIF_PROVIDER || vars.GAR_STAGING_WIF_PROVIDER }}
+      WIF_SERVICE_ACCOUNT: ${{ matrix.tenant == 'advanced' && vars.GAR_PRODUCTION_SERVICE_ACCOUNT || vars.GAR_STAGING_SERVICE_ACCOUNT }}
     strategy:
       fail-fast: false
       matrix:
@@ -40,28 +43,39 @@ jobs:
         include:
           - tenant: stgadvanced
             deploy_env: demo
-            op_item: tenant_stgadvanced-wizcli-sa
+            secret_name: tenant_stgadvanced-wizcli-sa
           - tenant: advanced
             deploy_env: demo
-            op_item: tenant_advanced-wizcli-sa
+            secret_name: tenant_advanced-wizcli-sa
 
     steps:
       - name: Checkout
         uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11
 
-      - name: Configure 1Password Service Account
-        uses: 1password/load-secrets-action/configure@581a835fb51b8e7ec56b71cf2ffddd7e68bb25e0
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@ba79af03959ebeac9769e648f473a284504d9193
         with:
-          service-account-token: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.WIF_SERVICE_ACCOUNT }}
 
-      - name: Load Environment Secrets
-        uses: 1password/load-secrets-action@581a835fb51b8e7ec56b71cf2ffddd7e68bb25e0
-        with:
-          export-env: true
-        env:
-          WIZCLI_URL: op://wiz-demo/${{ matrix.op_item }}/wizcliUrl
-          WIZ_CLIENT_ID: op://wiz-demo/${{ matrix.op_item }}/username
-          WIZ_CLIENT_SECRET: op://wiz-demo/${{ matrix.op_item }}/password
+      - name: Load Environment Secrets from GCP Secret Manager
+        shell: bash
+        run: |
+          set -euo pipefail
+          wiz_json="$(gcloud secrets versions access latest \
+            --project=demosecrets \
+            --secret="${{ matrix.secret_name }}")"
+          for mapping in \
+            "WIZCLI_URL:wizcliUrl" \
+            "WIZ_CLIENT_ID:username" \
+            "WIZ_CLIENT_SECRET:password"; do
+            env_name="${mapping%%:*}"
+            field_name="${mapping##*:}"
+            value="$(jq -r --arg field "${field_name}" '.[$field]' \
+              <<<"${wiz_json}")"
+            echo "::add-mask::${value}"
+            echo "${env_name}=${value}" >>"${GITHUB_ENV}"
+          done
 
       - name: Get Wiz CLI SHA256
         id: get-sha256
