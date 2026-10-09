@@ -25,6 +25,7 @@ on:
 
 permissions:
   contents: read
+  id-token: write
   actions: read
   security-events: write
 
@@ -33,38 +34,50 @@ jobs:
     runs-on: ubuntu-latest
     env:
       WIZCLI_URL: https://downloads.wiz.io/experimental/v1/wizcli/latest/wizcli-linux-amd64
+      WIF_PROVIDER: ${{ matrix.tenant == 'advanced' && vars.GAR_PRODUCTION_WIF_PROVIDER || vars.GAR_STAGING_WIF_PROVIDER }}
+      WIF_SERVICE_ACCOUNT: ${{ matrix.tenant == 'advanced' && vars.GAR_PRODUCTION_SERVICE_ACCOUNT || vars.GAR_STAGING_SERVICE_ACCOUNT }}
     strategy:
       fail-fast: false
       matrix:
-        tenant: [advanced, stgadvanced]
-        include:
-          - tenant: stgadvanced
-            deploy_env: demo
-            op_item: tenant_stgadvanced-wizcli-sa
-          - tenant: advanced
-            deploy_env: demo
-            op_item: tenant_advanced-wizcli-sa
+        include: ${{ github.event_name == 'pull_request' && fromJSON('[{"tenant":"stgadvanced","deploy_env":"demo","secret_name":"tenant_stgadvanced-wizcli-sa"}]') || fromJSON('[{"tenant":"stgadvanced","deploy_env":"demo","secret_name":"tenant_stgadvanced-wizcli-sa"},{"tenant":"advanced","deploy_env":"demo","secret_name":"tenant_advanced-wizcli-sa"}]') }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11
 
-      - name: Configure 1Password Service Account
-        uses: 1password/load-secrets-action/configure@581a835fb51b8e7ec56b71cf2ffddd7e68bb25e0
+      - name: Authenticate to Google Cloud
+        id: gcp-auth
+        continue-on-error: ${{ github.event_name == 'pull_request' }}
+        uses: google-github-actions/auth@ba79af03959ebeac9769e648f473a284504d9193
         with:
-          service-account-token: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.WIF_SERVICE_ACCOUNT }}
 
-      - name: Load Environment Secrets
-        uses: 1password/load-secrets-action@581a835fb51b8e7ec56b71cf2ffddd7e68bb25e0
-        with:
-          export-env: true
-        env:
-          WIZCLI_URL: op://wiz-demo/${{ matrix.op_item }}/wizcliUrl
-          WIZ_CLIENT_ID: op://wiz-demo/${{ matrix.op_item }}/username
-          WIZ_CLIENT_SECRET: op://wiz-demo/${{ matrix.op_item }}/password
+      - name: Load Environment Secrets from GCP Secret Manager
+        id: load-secrets
+        if: steps.gcp-auth.outcome == 'success'
+        continue-on-error: ${{ github.event_name == 'pull_request' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          wiz_json="$(gcloud secrets versions access latest \
+            --project=demosecrets \
+            --secret="${{ matrix.secret_name }}")"
+          for mapping in \
+            "WIZCLI_URL:wizcliUrl" \
+            "WIZ_CLIENT_ID:username" \
+            "WIZ_CLIENT_SECRET:password"; do
+            env_name="${mapping%%:*}"
+            field_name="${mapping##*:}"
+            value="$(jq -r --arg field "${field_name}" '.[$field]' \
+              <<<"${wiz_json}")"
+            echo "::add-mask::${value}"
+            echo "${env_name}=${value}" >>"${GITHUB_ENV}"
+          done
 
       - name: Get Wiz CLI SHA256
         id: get-sha256
+        if: steps.load-secrets.outcome == 'success'
         run: |
           echo "Fetching Wiz CLI SHA256..."
           WIZCLI_SHA256=$(curl -s ${{ env.WIZCLI_URL }}-sha256)
@@ -72,6 +85,7 @@ jobs:
           echo "sha256=$WIZCLI_SHA256" >> $GITHUB_OUTPUT
 
       - name: Cache Wiz CLI Binary
+        if: steps.load-secrets.outcome == 'success'
         uses: actions/cache@9255dc7a253b0ccc959486e2bca901246202afeb  # v5.0.1
         with:
           path: ~/.wiz/wizcli
@@ -80,6 +94,7 @@ jobs:
             ${{ runner.os }}-wizcli-
 
       - name: Restore Wiz configuration and rules cache
+        if: steps.load-secrets.outcome == 'success'
         uses: actions/cache@9255dc7a253b0ccc959486e2bca901246202afeb  # v5.0.1
         with:
           path: ~/.wiz/${{ (matrix.deploy_env == '' || matrix.deploy_env == 'app') && 'clusterFilesCache' || format('{0}_clusterFilesCache', matrix.deploy_env) }}
@@ -90,7 +105,7 @@ jobs:
             ${{ runner.os }}-wiz-config-
 
       - name: Install Wiz CLI
-        if: success() || (failure() && matrix.deploy_env == 'develop')
+        if: steps.load-secrets.outcome == 'success' && (success() || (failure() && matrix.deploy_env == 'develop'))
         run: |
           if [ ! -f ~/.wiz/wizcli ]; then
             echo "Downloading Wiz CLI..."
@@ -103,6 +118,7 @@ jobs:
           echo "WIZCLI_PATH=$HOME/.wiz/wizcli" >> $GITHUB_ENV
 
       - name: Run Wiz Security Scan
+        if: steps.load-secrets.outcome == 'success'
         run: |
           sudo -E ${{ env.WIZCLI_PATH }} scan dir "." \
           --name "${{ github.repository }}-${{ matrix.tenant }}-${{ github.run_id }}" --tag github_action_run_id=${{ github.run_id }} \
@@ -113,7 +129,7 @@ jobs:
         continue-on-error: true
 
       - name: Get Cluster Files Cache SHA256
-        if: always()
+        if: always() && steps.load-secrets.outcome == 'success'
         id: get-cluster-sha256
         run: |
           echo "Checking for cluster files cache after scan..."
@@ -148,6 +164,7 @@ jobs:
             ${{ runner.os }}-wiz-config-
 
       - name: Upload SARIF file
+        if: steps.load-secrets.outcome == 'success'
         uses: github/codeql-action/upload-sarif@5d4e8d1aca955e8d8589aabd499c5cae939e33c7  # v4
         with:
           sarif_file: "${{ matrix.tenant }}-${{ github.run_id }}.json"
@@ -155,6 +172,7 @@ jobs:
         continue-on-error: true
 
       - name: Upload SBOM file
+        if: steps.load-secrets.outcome == 'success'
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 #v5.0.0
         with:
           name: sbom-${{ matrix.tenant }}-${{ github.run_id }}

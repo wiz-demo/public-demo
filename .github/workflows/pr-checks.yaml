@@ -1,0 +1,235 @@
+name: Validate PR for promotion
+
+on:
+  # Deliberately no workflow_dispatch: a manual run has no PR context, so it
+  # would post a passing `checks-status` on an arbitrary commit and satisfy
+  # branch protection without ever validating a PR.
+  pull_request:
+    # `edited` fires on base-branch retargeting, which does not change the head
+    # SHA — without it a PR approved against staging could be pointed at main.
+    types: [opened, synchronize, reopened, ready_for_review, edited]
+    branches: [main, staging]
+
+jobs:
+  detect-pr-type:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      pr_stg_to_main_check: ${{ steps.detect-pr-type.outputs.pr_stg_to_main_check }}
+      pr_to_stg_check: ${{ steps.detect-pr-type.outputs.pr_to_stg_check }}
+      invalid_pr_check: ${{ steps.detect-pr-type.outputs.invalid_pr_check }}
+    steps:
+      - name: Detect PR Type
+        id: detect-pr-type
+        # Refs go through env, never inline interpolation: a branch name is
+        # attacker-controlled and git allows `$(...)` in it.
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+          BASE_REF: ${{ github.base_ref }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          BASE_REPO: ${{ github.repository }}
+        run: |
+          echo "Detected PR: ${HEAD_REPO}:${HEAD_REF} -> ${BASE_REPO}:${BASE_REF}"
+
+          stg_to_main=false
+          to_stg=false
+          invalid=false
+
+          # A fork may also call its branch `staging`, and head_ref does not say
+          # which repo it came from — so the promotion path requires both.
+          same_repo=false
+          if [[ -n "$HEAD_REPO" && "$HEAD_REPO" == "$BASE_REPO" ]]; then
+            same_repo=true
+          fi
+
+          if [[ "$BASE_REF" == "staging" ]]; then
+            to_stg=true
+          elif [[ "$BASE_REF" == "main" ]]; then
+            if [[ "$HEAD_REF" == "staging" && "$same_repo" == "true" ]]; then
+              stg_to_main=true
+            else
+              invalid=true
+            fi
+          fi
+
+          {
+            echo "pr_stg_to_main_check=${stg_to_main}"
+            echo "pr_to_stg_check=${to_stg}"
+            echo "invalid_pr_check=${invalid}"
+          } >> "$GITHUB_OUTPUT"
+
+  enforce-staging-base:
+    needs: detect-pr-type
+    runs-on: ubuntu-latest
+    if: ${{ needs.detect-pr-type.outputs.pr_to_stg_check == 'true' }}
+    permissions:
+      contents: read
+      pull-requests: write
+    outputs:
+      valid: ${{ steps.check-base.outputs.valid }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Check branch base
+        id: check-base
+        run: |
+          git fetch origin staging:staging
+          git fetch origin main:main
+
+          echo "🔍 Checking if branch was created from staging..."
+
+          MERGE_BASE_STAGING=$(git merge-base HEAD origin/staging)
+          MERGE_BASE_MAIN=$(git merge-base HEAD origin/main)
+
+          echo "  Merge-base with staging: $MERGE_BASE_STAGING"
+          echo "  Merge-base with main:    $MERGE_BASE_MAIN"
+
+          if [ "$MERGE_BASE_STAGING" = "$MERGE_BASE_MAIN" ] && [ "$(git rev-parse origin/staging)" != "$(git rev-parse origin/main)" ]; then
+            echo "❌ Branch appears to be based on main (same divergence point), or dev branch is not updated to the latest staging after it was merged to main"
+            echo "valid=false" >> "$GITHUB_OUTPUT"
+          elif git merge-base --is-ancestor "$MERGE_BASE_MAIN" "$MERGE_BASE_STAGING"; then
+            echo "✅ Branch is based on the latest staging branch"
+            echo "valid=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "❌ Branch history is unclear"
+            echo "valid=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Comment on PR with error
+        if: steps.check-base.outputs.valid == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          gh pr comment "$PR_NUMBER" --body "$(cat <<'COMMENT_EOF'
+          ## ❌ Invalid Branch Base
+
+          This PR cannot be merged because your branch was created from `main` instead of `staging`, or your development branch was created from `staging` locally but your local `staging` was not pulled after a recent merge to `main`.
+
+          ### How to fix this:
+
+          ```bash
+          git fetch origin
+          git rebase --onto origin/staging origin/main
+          git push --force-with-lease
+          ```
+
+          ---
+          This check ensures all features go through staging before reaching main.
+          COMMENT_EOF
+          )"
+
+  block-invalid-pr:
+    needs: [detect-pr-type, enforce-staging-base]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    if: |
+      always() && (
+        needs.detect-pr-type.outputs.invalid_pr_check == 'true' ||
+        (needs.enforce-staging-base.result == 'success' && needs.enforce-staging-base.outputs.valid == 'false')
+      )
+    steps:
+      - name: Fail workflow for invalid PR
+        env:
+          INVALID_PR: ${{ needs.detect-pr-type.outputs.invalid_pr_check }}
+          BASE_VALID: ${{ needs.enforce-staging-base.outputs.valid }}
+        run: |
+          if [ "$INVALID_PR" == "true" ]; then
+            echo "❌ ERROR: PRs to main must come from staging branch only"
+          fi
+          if [ "$BASE_VALID" == "false" ]; then
+            echo "❌ ERROR: Branch was created from main instead of staging, or dev branch is not updated to the latest staging after it was merged to main"
+          fi
+          exit 1
+
+  lint:
+    needs: detect-pr-type
+    if: ${{ needs.detect-pr-type.outputs.pr_to_stg_check == 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Parse workflow and action YAML
+        run: |
+          mapfile -t YAML_FILES < <(find .github -type f \( -name '*.yml' -o -name '*.yaml' \))
+          if [ ${#YAML_FILES[@]} -eq 0 ]; then
+            echo "No YAML files to validate"
+            exit 0
+          fi
+          ruby -ryaml -e '
+            ARGV.each do |f|
+              YAML.load_file(f)
+              puts "ok #{f}"
+            end
+          ' "${YAML_FILES[@]}"
+
+  # Gate job for branch protection — always runs and reports the right status.
+  # Require this check (`checks-status`) on main and staging.
+  checks-status:
+    needs: [detect-pr-type, enforce-staging-base, lint, block-invalid-pr]
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check result
+        env:
+          DETECT_RESULT: ${{ needs.detect-pr-type.result }}
+          ENFORCE_RESULT: ${{ needs.enforce-staging-base.result }}
+          LINT_RESULT: ${{ needs.lint.result }}
+          BLOCK_RESULT: ${{ needs.block-invalid-pr.result }}
+          PR_TO_STG: ${{ needs.detect-pr-type.outputs.pr_to_stg_check }}
+          INVALID_PR: ${{ needs.detect-pr-type.outputs.invalid_pr_check }}
+          BASE_VALID: ${{ needs.enforce-staging-base.outputs.valid }}
+        run: |
+          echo "detect-pr-type:       ${DETECT_RESULT} (to_staging=${PR_TO_STG}, invalid=${INVALID_PR})"
+          echo "enforce-staging-base: ${ENFORCE_RESULT} (valid=${BASE_VALID})"
+          echo "lint:                 ${LINT_RESULT}"
+          echo "block-invalid-pr:     ${BLOCK_RESULT}"
+          echo ""
+
+          if [[ "$DETECT_RESULT" != "success" ]]; then
+            echo "❌ PR type detection did not succeed (${DETECT_RESULT})"
+            exit 1
+          fi
+
+          if [[ "$INVALID_PR" == "true" ]]; then
+            echo "❌ PRs to main must come from staging"
+            exit 1
+          fi
+
+          if [[ "$BLOCK_RESULT" == "failure" ]]; then
+            echo "❌ Invalid PR was blocked"
+            exit 1
+          fi
+
+          if [[ "$PR_TO_STG" != "true" ]]; then
+            echo "✅ Not a PR to staging — base and lint checks not required"
+            exit 0
+          fi
+
+          if [[ "$ENFORCE_RESULT" != "success" ]]; then
+            echo "❌ Base-branch enforcement did not succeed (${ENFORCE_RESULT})"
+            exit 1
+          fi
+
+          if [[ "$BASE_VALID" != "true" ]]; then
+            echo "❌ Branch is not based on the latest staging (valid=${BASE_VALID})"
+            exit 1
+          fi
+
+          if [[ "$LINT_RESULT" != "success" ]]; then
+            echo "❌ Lint did not succeed (${LINT_RESULT})"
+            exit 1
+          fi
+
+          echo "✅ All required checks passed"
