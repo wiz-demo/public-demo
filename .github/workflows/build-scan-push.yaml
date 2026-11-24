@@ -225,7 +225,7 @@ jobs:
       - name: Run Wiz Security Scan
         if: success() || (failure() && env.DEPLOY_ENV == 'develop')
         run: |
-          sudo -E ${{ env.WIZCLI_PATH }} scan container-image "${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAME }}-${{ matrix.dockerfile }}:${{ vars.IMAGE_TAG }}" \
+          ${{ env.WIZCLI_PATH }} scan container-image "${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAME }}-${{ matrix.dockerfile }}:${{ vars.IMAGE_TAG }}" \
             --dockerfile "./dockerfiles/${{ matrix.dockerfile }}/Dockerfile" \
             --tag github_action_run_id=${{ github.run_id }} \
             --tag dockerfile=${{ matrix.dockerfile }} \
@@ -251,7 +251,7 @@ jobs:
         if: success() || (failure() && env.DEPLOY_ENV == 'develop')
         run: |
           echo "Tagging image in Wiz with digest..."
-          sudo -E ${{ env.WIZCLI_PATH }} tag "${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAME }}-${{ matrix.dockerfile }}:${{ vars.IMAGE_TAG }}" --digest "${{ steps.push.outputs.digest }}"
+          ${{ env.WIZCLI_PATH }} tag "${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAME }}-${{ matrix.dockerfile }}:${{ vars.IMAGE_TAG }}" --digest "${{ steps.push.outputs.digest }}"
         continue-on-error: ${{ env.DEPLOY_ENV == 'develop' }}
 
       - name: Get Cluster Files Cache SHA256

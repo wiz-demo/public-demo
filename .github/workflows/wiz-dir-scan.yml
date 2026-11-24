@@ -120,13 +120,12 @@ jobs:
       - name: Run Wiz Security Scan
         if: steps.load-secrets.outcome == 'success'
         run: |
-          sudo -E ${{ env.WIZCLI_PATH }} scan dir "." \
+          ${{ env.WIZCLI_PATH }} scan dir "." \
           --name "${{ github.repository }}-${{ matrix.tenant }}-${{ github.run_id }}" --tag github_action_run_id=${{ github.run_id }} \
           --tag tenant=${{ matrix.tenant }} --tag deploy_env=${{ matrix.deploy_env }} --sarif-output-file "${{ matrix.tenant }}-${{ github.run_id }}.json" --sbom-format spdx-json \
           --sbom-output-file "${{ matrix.tenant }}-${{ github.run_id }}-sbom.json" --by-policy-hits="DISABLED"
         env:
           WIZ_ENV: ${{ matrix.deploy_env }}
-        continue-on-error: true
 
       - name: Get Cluster Files Cache SHA256
         if: always() && steps.load-secrets.outcome == 'success'
